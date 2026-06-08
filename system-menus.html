@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>菜单管理</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.system-menus.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=2"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    (function() { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============== Toast ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== Mock 数据 ============== */
+    // 注：localStorage key 升版到 v2 —— 同步侧栏 MENU_CONFIG 的隐藏状态：
+    //   ① 我的代理（id=3）→ 禁用
+    //   ② 数据报表（id=5）→ 禁用
+    //   ③ 代理业绩报表（id=6）→ 禁用
+    const MENUS_KEY = 'zb_admin_menus_v2';
+    // 类型：dir(目录) / menu(菜单) / button(按钮)
+    const DEFAULT_MENUS = [
+      { id: 1,  parentId: 0, nameZh: '用户管理',     nameEn: 'User Management', path: '',                   icon: 'users',  sort: 1, type: 'dir',  permKey: '',                  status: 1 },
+      { id: 2,  parentId: 1, nameZh: '代理邀请用户', nameEn: 'Invited Users',   path: 'invited-users.html', icon: 'list',   sort: 1, type: 'menu', permKey: 'users:invited:list', status: 1 },
+      { id: 3,  parentId: 1, nameZh: '我的代理',     nameEn: 'My Agents',       path: 'my-agents.html',     icon: 'star',   sort: 2, type: 'menu', permKey: 'users:my:list',      status: 0 },
+      { id: 4,  parentId: 1, nameZh: '代理列表',     nameEn: 'All Agents',      path: 'agents.html',        icon: 'grid',   sort: 3, type: 'menu', permKey: 'users:agents:list',  status: 1 },
+      { id: 5,  parentId: 0, nameZh: '数据报表',     nameEn: 'Reports',         path: '',                   icon: 'chart',  sort: 2, type: 'dir',  permKey: '',                  status: 0 },
+      { id: 6,  parentId: 5, nameZh: '代理业绩报表', nameEn: 'Agent Performance', path: 'reports-agent-perf.html', icon: 'trend', sort: 1, type: 'menu', permKey: 'reports:agent:perf', status: 0 },
+      { id: 7,  parentId: 0, nameZh: '系统用户管理', nameEn: 'System Management', path: '',                 icon: 'gear',   sort: 3, type: 'dir',  permKey: '',                  status: 1 },
+      { id: 8,  parentId: 7, nameZh: '系统用户',     nameEn: 'System Users',    path: 'system-users.html',  icon: 'user',   sort: 1, type: 'menu', permKey: 'system:user:list',  status: 1 },
+      { id: 9,  parentId: 7, nameZh: '角色管理',     nameEn: 'Roles',           path: 'system-roles.html',  icon: 'shield', sort: 2, type: 'menu', permKey: 'system:role:list',  status: 1 },
+      { id: 10, parentId: 7, nameZh: '菜单管理',     nameEn: 'Menus',           path: 'system-menus.html',  icon: 'menu',   sort: 3, type: 'menu', permKey: 'system:menu:list',  status: 1 },
+      { id: 11, parentId: 8, nameZh: '新增用户',     nameEn: 'Add User',        path: '',                   icon: '',       sort: 1, type: 'button', permKey: 'system:user:add', status: 1 },
+      { id: 12, parentId: 8, nameZh: '删除用户',     nameEn: 'Delete User',     path: '',                   icon: '',       sort: 2, type: 'button', permKey: 'system:user:del', status: 1 },
+    ];
+
+    function loadMenus() {
+      try {
+        const d = JSON.parse(localStorage.getItem(MENUS_KEY));
+        if (Array.isArray(d) && d.length) return d;
+      } catch (e) {}
+      return DEFAULT_MENUS.slice();
+    }
+    function saveMenus(arr) {
+      try { localStorage.setItem(MENUS_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    let MENUS = loadMenus();
+    let editingId = null;
+    let expandedSet = new Set();    // 默认顶级展开
+    MENUS.filter(m => m.parentId === 0).forEach(m => expandedSet.add(m.id));
+
+    /* ============== 工具：建立树 ============== */
+    function getChildren(pid) {
+      return MENUS.filter(m => m.parentId === pid).sort((a, b) => a.sort - b.sort);
+    }
+    function findMenu(id) { return MENUS.find(m => m.id === id); }
+    function hasChildren(id) { return MENUS.some(m => m.parentId === id); }
+    function getDescendants(id, acc) {
+      acc = acc || [];
+      MENUS.filter(m => m.parentId === id).forEach(c => {
+        acc.push(c);
+        getDescendants(c.id, acc);
+      });
+      return acc;
+    }
+
+    /* ============== 渲染树形表格 ============== */
+    function renderTree() {
+      const lang = getLang();
+      const rows = [];
+      function walk(parentId, depth) {
+        getChildren(parentId).forEach((m) => {
+          const childs = getChildren(m.id);
+          const expandable = childs.length > 0;
+          const expanded = expandedSet.has(m.id);
+          const indent = depth * 22;
+          const arrow = expandable
+            ? `<svg class="tree-arrow ${expanded ? 'expanded' : ''}" data-toggle="${m.id}" viewBox="0 0 24 24" width="12" height="12"><polyline points="9 6 15 12 9 18" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+            : '<span class="tree-arrow placeholder"></span>';
+
+          rows.push(`
+            <tr draggable="true" data-id="${m.id}" data-pid="${m.parentId}" class="tree-row">
+              <td class="tree-name-cell">
+                <div style="padding-left: ${indent}px" class="tree-name-wrap">
+                  <svg class="drag-handle" viewBox="0 0 24 24" width="14" height="14"><circle cx="9" cy="6" r="1.5" fill="currentColor"/><circle cx="15" cy="6" r="1.5" fill="currentColor"/><circle cx="9" cy="12" r="1.5" fill="currentColor"/><circle cx="15" cy="12" r="1.5" fill="currentColor"/><circle cx="9" cy="18" r="1.5" fill="currentColor"/><circle cx="15" cy="18" r="1.5" fill="currentColor"/></svg>
+                  ${arrow}
+                  <span class="tree-icon">${iconSvg(m.icon)}</span>
+                  <span class="tree-name">${lang === 'en' ? m.nameEn : m.nameZh}</span>
+                </div>
+              </td>
+              <td class="muted">${m.path || '<span class="muted">—</span>'}</td>
+              <td class="muted">${m.icon || '<span class="muted">—</span>'}</td>
+              <td class="text-center"><span class="num">${m.sort}</span></td>
+              <td>${typeTag(m.type)}</td>
+              <td class="mono small">${m.permKey || '<span class="muted">—</span>'}</td>
+              <td class="text-center">
+                <span class="st-tag ${m.status ? 'st-active' : 'st-disabled'}">
+                  ${m.status ? t('common.statusEnabled') : t('common.statusDisabled')}
+                </span>
+              </td>
+              <td class="text-center">
+                ${m.type !== 'button' ? `<button class="t-act" data-act="add-child" data-id="${m.id}">${t('menuMgr.btnAddChild')}</button>` : ''}
+                ${m.type !== 'button' ? `<button class="t-act t-act-btn" data-act="add-btn" data-id="${m.id}">${t('menuMgr.btnAddBtn')}</button>` : ''}
+                <button class="t-act" data-act="edit" data-id="${m.id}">${t('common.edit')}</button>
+                <button class="t-act t-del" data-act="del" data-id="${m.id}">${t('common.delete')}</button>
+              </td>
+            </tr>
+          `);
+
+          if (expanded) walk(m.id, depth + 1);
+        });
+      }
+      walk(0, 0);
+
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table menu-tree-table">
+            <colgroup>
+              <col style="width:26%">
+              <col style="width:14%">
+              <col style="width:8%">
+              <col style="width:6%">
+              <col style="width:8%">
+              <col style="width:16%">
+              <col style="width:8%">
+              <col style="width:14%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>${t('menuMgr.col.name')}</th>
+                <th>${t('menuMgr.col.path')}</th>
+                <th>${t('menuMgr.col.icon')}</th>
+                <th class="text-center">${t('menuMgr.col.sort')}</th>
+                <th>${t('menuMgr.col.type')}</th>
+                <th>${t('menuMgr.col.permKey')}</th>
+                <th class="text-center">${t('menuMgr.col.status')}</th>
+                <th class="text-center">${t('menuMgr.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody id="menuTreeBody">
+              ${rows.length ? rows.join('') : emptyRow(8)}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function iconSvg(icon) {
+      // 简单的占位：用首字母
+      return icon ? `<span class="icon-placeholder">${icon[0].toUpperCase()}</span>` : '<span class="icon-placeholder muted">·</span>';
+    }
+    function typeTag(type) {
+      const cls = { dir: 'type-dir', menu: 'type-menu', button: 'type-btn' }[type] || '';
+      return `<span class="type-tag ${cls}">${t('menuMgr.type.' + type)}</span>`;
+    }
+    function emptyRow(cols) {
+      return `<tr><td colspan="${cols}"><div class="empty-cell"><span>${t('menuMgr.empty')}</span></div></td></tr>`;
+    }
+
+    /* ============== 父菜单选项（用于弹窗） ============== */
+    function parentOptions(excludeId) {
+      // 排除自己 + 自己的所有子孙（避免循环）
+      const excludes = new Set([excludeId]);
+      if (excludeId) getDescendants(excludeId).forEach(d => excludes.add(d.id));
+      const lang = getLang();
+      const opts = [`<option value="0">${t('menuMgr.field.parentRoot')}</option>`];
+      function walk(pid, depth) {
+        getChildren(pid).forEach(m => {
+          if (excludes.has(m.id) || m.type === 'button') return;
+          const prefix = '—'.repeat(depth);
+          opts.push(`<option value="${m.id}">${prefix ? prefix + ' ' : ''}${lang === 'en' ? m.nameEn : m.nameZh}</option>`);
+          walk(m.id, depth + 1);
+        });
+      }
+      walk(0, 0);
+      return opts.join('');
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.system-menus.title')}</h1>
+        <p class="page-desc">${t('page.system-menus.desc')}</p>
+      </div>
+
+      <div class="card sec-card">
+        <div class="filter-row">
+          <input type="text" class="form-input filter-input" placeholder="${t('menuMgr.filter.kw')}" id="kw" />
+          <div class="filter-actions">
+            <button class="btn-reset" id="btnExpand">${t('menuMgr.expandAll')}</button>
+            <button class="btn-reset" id="btnCollapse">${t('menuMgr.collapseAll')}</button>
+            <button class="btn-add" id="btnAdd">
+              <svg viewBox="0 0 24 24" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+              ${t('menuMgr.btnAdd')}
+            </button>
+          </div>
+        </div>
+
+        <div class="drag-hint">${t('menuMgr.dragHint')}</div>
+
+        <div id="treeArea"></div>
+      </div>
+
+      <!-- 新增/编辑 菜单弹窗 -->
+      <div class="modal" id="menuModal">
+        <div class="modal-mask" data-act="close-menu"></div>
+        <div class="modal-body menu-modal">
+          <div class="modal-head">
+            <h3 id="menuModalTitle">${t('menuMgr.modal.add')}</h3>
+            <button class="modal-close" data-act="close-menu">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="form-grid">
+              <div class="form-line full">
+                <label>${t('menuMgr.field.parentLabel')}</label>
+                <select id="fParent"></select>
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.nameZhLabel')} <span class="required">*</span></label>
+                <input type="text" id="fNameZh" placeholder="${t('menuMgr.field.nameZhPlaceholder')}" maxlength="20" />
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.nameEnLabel')} <span class="required">*</span></label>
+                <input type="text" id="fNameEn" placeholder="${t('menuMgr.field.nameEnPlaceholder')}" maxlength="40" />
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.typeLabel')}</label>
+                <select id="fType">
+                  <option value="dir">${t('menuMgr.type.dir')}</option>
+                  <option value="menu" selected>${t('menuMgr.type.menu')}</option>
+                  <option value="button">${t('menuMgr.type.button')}</option>
+                </select>
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.statusLabel')}</label>
+                <select id="fStatus">
+                  <option value="1" selected>${t('common.statusEnabled')}</option>
+                  <option value="0">${t('common.statusDisabled')}</option>
+                </select>
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.pathLabel')}</label>
+                <input type="text" id="fPath" placeholder="${t('menuMgr.field.pathPlaceholder')}" maxlength="80" />
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.iconLabel')}</label>
+                <input type="text" id="fIcon" placeholder="${t('menuMgr.field.iconPlaceholder')}" maxlength="20" />
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.sortLabel')}</label>
+                <input type="number" id="fSort" placeholder="${t('menuMgr.field.sortPlaceholder')}" min="0" max="999" />
+              </div>
+              <div class="form-line">
+                <label>${t('menuMgr.field.permKeyLabel')}</label>
+                <input type="text" id="fPermKey" placeholder="${t('menuMgr.field.permKeyPlaceholder')}" maxlength="60" />
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-menu">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnSaveMenu">${t('common.save')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    /* ============== 弹窗工具 ============== */
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    function openMenuModal(menu, presetParentId, presetType) {
+      editingId = menu ? menu.id : null;
+      const defaultType = presetType || 'menu';
+      const titleKey = menu
+        ? 'menuMgr.modal.edit'
+        : (presetType === 'button' ? 'menuMgr.btnAddBtn' : (presetParentId ? 'menuMgr.btnAddChild' : 'menuMgr.modal.add'));
+      document.getElementById('menuModalTitle').textContent = t(titleKey);
+      document.getElementById('fParent').innerHTML = parentOptions(menu ? menu.id : null);
+      document.getElementById('fParent').value = String(menu ? menu.parentId : (presetParentId != null ? presetParentId : 0));
+      document.getElementById('fNameZh').value = menu ? menu.nameZh : '';
+      document.getElementById('fNameEn').value = menu ? menu.nameEn : '';
+      document.getElementById('fType').value   = menu ? menu.type : defaultType;
+      document.getElementById('fStatus').value = menu ? String(menu.status) : '1';
+      document.getElementById('fPath').value   = menu ? menu.path : '';
+      document.getElementById('fIcon').value   = menu ? menu.icon : '';
+      document.getElementById('fSort').value   = menu ? menu.sort : 1;
+      document.getElementById('fPermKey').value = menu ? menu.permKey : '';
+      openModal('menuModal');
+    }
+
+    /* ============== 拖拽排序 ============== */
+    let dragId = null;
+    function bindDrag() {
+      document.querySelectorAll('.tree-row').forEach((tr) => {
+        tr.addEventListener('dragstart', (e) => {
+          dragId = parseInt(tr.dataset.id, 10);
+          tr.classList.add('dragging');
+          e.dataTransfer.effectAllowed = 'move';
+        });
+        tr.addEventListener('dragend', () => {
+          tr.classList.remove('dragging');
+          document.querySelectorAll('.tree-row').forEach((x) => x.classList.remove('drag-over'));
+          dragId = null;
+        });
+        tr.addEventListener('dragover', (e) => {
+          if (dragId == null) return;
+          const targetId = parseInt(tr.dataset.id, 10);
+          const target = findMenu(targetId);
+          const source = findMenu(dragId);
+          // 只能在同一父级下拖动
+          if (target && source && target.parentId === source.parentId && targetId !== dragId) {
+            e.preventDefault();
+            tr.classList.add('drag-over');
+          }
+        });
+        tr.addEventListener('dragleave', () => tr.classList.remove('drag-over'));
+        tr.addEventListener('drop', (e) => {
+          e.preventDefault();
+          tr.classList.remove('drag-over');
+          const targetId = parseInt(tr.dataset.id, 10);
+          if (dragId == null || targetId === dragId) return;
+          const source = findMenu(dragId);
+          const target = findMenu(targetId);
+          if (!source || !target || source.parentId !== target.parentId) return;
+
+          // 重新分配同级 sort
+          const siblings = getChildren(source.parentId);
+          const sourceIdx = siblings.findIndex(x => x.id === source.id);
+          const targetIdx = siblings.findIndex(x => x.id === target.id);
+          siblings.splice(sourceIdx, 1);
+          siblings.splice(targetIdx, 0, source);
+          siblings.forEach((s, i) => { s.sort = i + 1; });
+
+          saveMenus(MENUS);
+          refresh();
+          toast(t('menuMgr.toast.reordered'), 'success');
+        });
+      });
+    }
+
+    function bindRowActions() {
+      // 展开/折叠
+      document.querySelectorAll('[data-toggle]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const id = parseInt(el.dataset.toggle, 10);
+          if (expandedSet.has(id)) expandedSet.delete(id);
+          else expandedSet.add(id);
+          refresh();
+        });
+      });
+      // 操作
+      document.querySelectorAll('#treeArea [data-act][data-id]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const id = parseInt(b.dataset.id, 10);
+          const act = b.dataset.act;
+          const m = findMenu(id);
+          if (!m) return;
+
+          if (act === 'add-child') {
+            expandedSet.add(id);
+            openMenuModal(null, id, 'menu');
+          }
+          else if (act === 'add-btn') {
+            expandedSet.add(id);
+            openMenuModal(null, id, 'button');
+          }
+          else if (act === 'edit') openMenuModal(m);
+          else if (act === 'del') {
+            const children = getDescendants(id);
+            const lang = getLang();
+            const name = lang === 'en' ? m.nameEn : m.nameZh;
+            const msg = children.length > 0
+              ? t('menuMgr.toast.confirmDeleteWithChildren', { n: name, c: children.length })
+              : t('menuMgr.toast.confirmDelete', { n: name });
+            if (confirm(msg)) {
+              const removeIds = new Set([id, ...children.map(c => c.id)]);
+              MENUS = MENUS.filter(x => !removeIds.has(x.id));
+              saveMenus(MENUS); refresh();
+              toast(t('menuMgr.toast.deleted'), 'success');
+            }
+          }
+        });
+      });
+    }
+
+    function refresh() {
+      document.getElementById('treeArea').innerHTML = renderTree();
+      bindRowActions();
+      bindDrag();
+    }
+
+    window.onPageReady = function () {
+      refresh();
+
+      document.getElementById('btnExpand').addEventListener('click', () => {
+        MENUS.filter(m => hasChildren(m.id)).forEach(m => expandedSet.add(m.id));
+        refresh();
+      });
+      document.getElementById('btnCollapse').addEventListener('click', () => {
+        expandedSet.clear();
+        refresh();
+      });
+      document.getElementById('btnAdd').addEventListener('click', () => openMenuModal(null, 0));
+
+      document.querySelectorAll('[data-act="close-menu"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('menuModal'));
+      });
+
+      // 类型变更时给出微小提示（按钮 → 必填权限标识；菜单 → 必填路径）
+      document.getElementById('fType').addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (v === 'button') document.getElementById('fPermKey').focus();
+        else if (v === 'menu') document.getElementById('fPath').focus();
+      });
+
+      // 保存
+      document.getElementById('btnSaveMenu').addEventListener('click', () => {
+        const parentId = parseInt(document.getElementById('fParent').value, 10);
+        const nameZh   = document.getElementById('fNameZh').value.trim();
+        const nameEn   = document.getElementById('fNameEn').value.trim();
+        const type     = document.getElementById('fType').value;
+        const status   = parseInt(document.getElementById('fStatus').value, 10);
+        const path     = document.getElementById('fPath').value.trim();
+        const icon     = document.getElementById('fIcon').value.trim();
+        const sort     = parseInt(document.getElementById('fSort').value, 10) || 1;
+        const permKey  = document.getElementById('fPermKey').value.trim();
+
+        if (!nameZh || !nameEn) return toast(t('menuMgr.val.nameRequired'), 'danger');
+        if (type === 'menu' && !path) return toast(t('menuMgr.val.pathRequired'), 'danger');
+        if (type === 'button' && !permKey) return toast(t('menuMgr.val.permKeyRequired'), 'danger');
+
+        if (editingId) {
+          const m = findMenu(editingId);
+          Object.assign(m, { parentId, nameZh, nameEn, type, status, path, icon, sort, permKey });
+          toast(t('menuMgr.toast.saved'), 'success');
+        } else {
+          MENUS.push({
+            id: Date.now(), parentId, nameZh, nameEn, type, status, path, icon, sort, permKey,
+          });
+          toast(t('menuMgr.toast.created'), 'success');
+        }
+        saveMenus(MENUS);
+        closeModal('menuModal');
+        refresh();
+      });
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* 顶部新增 / 展开折叠 */
+    .btn-add {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 7px 14px; font-size: var(--fs-body);
+      border-radius: 5px; border: none;
+      color: #fff; background: var(--color-primary);
+      cursor: pointer; transition: all 0.15s;
+      font-family: inherit;
+      box-shadow: 0 2px 6px rgba(0,200,150,0.25);
+    }
+    .btn-add:hover { background: var(--color-primary-hover); transform: translateY(-1px); }
+
+    .drag-hint {
+      padding: 8px 12px;
+      background: #fff8e6;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      font-size: var(--fs-meta);
+      color: #92400e;
+      margin-bottom: 14px;
+    }
+
+    /* 树形表 */
+    .menu-tree-table .small { font-size: var(--fs-body-sm); }
+
+    .tree-row { transition: background 0.15s; }
+    .tree-row.dragging { opacity: 0.4; background: rgba(0,200,150,0.05); }
+    .tree-row.drag-over {
+      background: rgba(0,200,150,0.1);
+      box-shadow: inset 0 -2px 0 var(--color-primary);
+    }
+
+    .tree-name-cell { overflow: visible; }
+    .tree-name-wrap {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .drag-handle {
+      color: var(--color-text-muted);
+      cursor: grab;
+      flex-shrink: 0;
+    }
+    .drag-handle:hover { color: var(--color-text-secondary); }
+    .tree-row.dragging .drag-handle { cursor: grabbing; }
+
+    .tree-arrow {
+      width: 14px; height: 14px;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    .tree-arrow.expanded { transform: rotate(90deg); color: var(--color-primary); }
+    .tree-arrow.placeholder { cursor: default; visibility: hidden; }
+
+    .tree-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px;
+      flex-shrink: 0;
+    }
+    .icon-placeholder {
+      display: inline-block;
+      width: 20px; height: 20px;
+      line-height: 20px;
+      text-align: center;
+      background: rgba(0,200,150,0.1);
+      color: var(--color-primary);
+      border-radius: 4px;
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+    }
+    .icon-placeholder.muted { background: #f0f3f7; color: var(--color-text-muted); font-weight: normal; }
+
+    .tree-name {
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+    }
+
+    /* 类型徽章 */
+    .type-tag {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 4px;
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-semibold);
+    }
+    .type-dir  { background: #fff5e6; color: #d97706; }
+    .type-menu { background: #e0f2fe; color: #0369a1; }
+    .type-btn  { background: #ede9fe; color: #6d28d9; }
+
+    /* "新增按钮" 操作 - 紫色（呼应按钮类型徽章） */
+    .t-act.t-act-btn { color: #6d28d9; }
+    .t-act.t-act-btn:hover { background: rgba(109,40,217,0.08); }
+
+    /* 弹窗（同 system-roles） */
+    .modal { position: fixed; inset: 0; z-index: 999; display: none; }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      animation: modalIn 0.2s; overflow: hidden;
+      max-height: 90vh; display: flex; flex-direction: column;
+    }
+    .menu-modal { width: 640px; max-width: 92vw; }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px; border-bottom: 1px solid #f0f3f7; flex-shrink: 0;
+    }
+    .modal-head h3 { font-size: var(--fs-h2); font-weight: var(--fw-bold); color: var(--color-text); }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted); font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 18px 20px; overflow-y: auto; flex: 1; }
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc;
+      flex-shrink: 0;
+    }
+    .modal-foot .btn-outline, .modal-foot .btn-primary {
+      padding: 7px 18px; font-size: var(--fs-body);
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      font-family: inherit; font-weight: var(--fw-medium);
+      border: 1px solid transparent;
+    }
+    .modal-foot .btn-outline { color: var(--color-text); background: #fff; border-color: var(--color-border); }
+    .modal-foot .btn-outline:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .modal-foot .btn-primary { color: #fff; background: var(--color-primary); }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    .form-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 14px 16px;
+    }
+    .form-line { display: flex; flex-direction: column; gap: 5px; }
+    .form-line.full { grid-column: 1 / -1; }
+    .form-line label {
+      font-size: var(--fs-body-sm); color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .required { color: var(--color-danger); margin-left: 2px; }
+    .form-line input, .form-line select {
+      padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      transition: border-color 0.15s;
+      font-family: inherit;
+      background: #fff;
+    }
+    .form-line input:focus, .form-line select:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+  </style>
+</body>
+</html>

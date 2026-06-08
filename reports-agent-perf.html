@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>代理业绩报表</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.reports-agent-perf.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=11"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============================================================
+     * 代理业绩报表（按业务类型 ZB / IB / KOL 拆分 3 个 tab）
+     * - 共享筛选条 + 导出 / 重置 / 查询
+     * - 每个 tab 拥有独立的列集 / 汇总指标 / 数据
+     *   · ZB  → 含「佣金分成」(L1 only)，不含返利
+     *   · IB  → 含「返利总额 / 实际返佣总额」，不含分成
+     *   · KOL → 同 IB
+     * ============================================================ */
+
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== 字典 ============== */
+    const TYPES = ['ZB', 'IB', 'KOL'];
+    const TIERS_BY_TYPE = {
+      ZB:  ['L1', 'L2'],
+      IB:  ['L1', 'L2', 'L3'],
+      KOL: ['senior_promoter', 'user_agent', 'business_agent'],
+    };
+    function tiersForType(type) { return TIERS_BY_TYPE[type] || []; }
+
+    const PROJECTS = [
+      { key: 'dana',      name: 'Dana' },
+      { key: 'tradewill', name: 'Tradewill' },
+      { key: 'zibt',      name: 'ZIBT' },
+    ];
+    const SOURCES   = ['natural', 'invite', 'promo', 'internal'];
+    const COUNTRIES = ['CN','HK','TW','US','IN','VN','TH','MY','ID','BR','PH','SG','JP','NG'];
+
+    const DEPTS = ['sales', 'ops', 'market', 'cs', 'risk'];
+    const PERSONS_BY_DEPT = {
+      sales:  [ { id: 'zhangwei',  name: '张伟' },  { id: 'liuyang',  name: '刘洋' } ],
+      ops:    [ { id: 'lina',      name: '李娜' },  { id: 'wangfang', name: '王芳' } ],
+      market: [ { id: 'chenjie',   name: '陈杰' } ],
+      cs:     [ { id: 'zhaolei',   name: '赵磊' },  { id: 'sunmei',   name: '孙梅' } ],
+      risk:   [ { id: 'huangbo',   name: '黄博' } ],
+    };
+    const ALL_PERSONS = (() => {
+      const out = [];
+      DEPTS.forEach(d => PERSONS_BY_DEPT[d].forEach(p => out.push({ ...p, dept: d })));
+      return out;
+    })();
+    function personsForDept(d) { return d ? PERSONS_BY_DEPT[d] || [] : ALL_PERSONS; }
+    function personName(id) { const p = ALL_PERSONS.find(x => x.id === id); return p ? p.name : '-'; }
+    function deptName(d)    { return d ? t('agents.dept.' + d) : '-'; }
+
+    /* ============== 格式化 / 标签 ============== */
+    function fmtNum(v)  { return Number(v).toLocaleString('en-US'); }
+    function fmtUSDT(v) {
+      return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+    }
+    function projectName(key) { const p = PROJECTS.find(x => x.key === key); return p ? p.name : key; }
+    function tierTag(tier) {
+      const map = {
+        L1: 'tier-l1', L2: 'tier-l2', L3: 'tier-l3', L4: 'tier-l4', L5: 'tier-l5',
+        test: 'tier-test',
+        senior_promoter: 'tier-kol-1', user_agent: 'tier-kol-2', business_agent: 'tier-kol-3',
+      };
+      return `<span class="tier-tag ${map[tier]||''}">${t('myAgent.tier.' + tier.toLowerCase())}</span>`;
+    }
+    function countryTag(cc){ return `<span class="ctr-tag">${cc} · ${t('agents.country.' + cc)}</span>`; }
+    /* 仅 ZB 一级代理可获得分成 */
+    function hasShare(r) { return r.type === 'ZB' && r.tier === 'L1'; }
+
+    /* ============== Mock 数据（按业务类型分组） ============== */
+    const ROWS = [
+      /* —— ZB 代理（15 条） —— */
+      { sid:'S1001', agentId:'A100001', agent:'alice@gmail.com',   inviter:'master001@xx.com', type:'ZB', tier:'L2', country:'IN', project:'zibt', source:'invite',   regTime:'2026-03-15 14:32', dept:'sales',  person:'zhangwei', newRegUsers:42,  deposit:8520.00,  withdraw:1200.00, settledComm:278.40, tradeUsers:35,  lots:18560.25,  rebate:0,      actualRebate:0,      share:0,        withdrawable:1280.50 },
+      { sid:'S1002', agentId:'A100002', agent:'bob@outlook.com',   inviter:'-',                type:'ZB', tier:'L1', country:'ID', project:'zibt', source:'natural',  regTime:'2026-04-02 09:15', dept:'sales',  person:'zhangwei', newRegUsers:18,  deposit:2300.00,  withdraw:0,       settledComm:31.58,  tradeUsers:12,  lots:2105.50,   rebate:0,      actualRebate:0,      share:124.80,   withdrawable:320.00  },
+      { sid:'S1003', agentId:'A100003', agent:'frank@gmail.com',   inviter:'master001@xx.com', type:'ZB', tier:'L1', country:'IN', project:'zibt', source:'invite',   regTime:'2026-05-08 08:50', dept:'sales',  person:'liuyang',  newRegUsers:8,   deposit:880.00,   withdraw:0,       settledComm:14.70,  tradeUsers:6,   lots:980.10,    rebate:0,      actualRebate:0,      share:68.20,    withdrawable:480.00  },
+      { sid:'S1004', agentId:'A100004', agent:'helen@gmail.com',   inviter:'master004@xx.com', type:'ZB', tier:'L1', country:'ID', project:'zibt', source:'invite',   regTime:'2026-05-14 21:05', dept:'sales',  person:'liuyang',  newRegUsers:5,   deposit:380.00,   withdraw:0,       settledComm:4.80,   tradeUsers:3,   lots:320.00,    rebate:0,      actualRebate:0,      share:25.60,    withdrawable:120.00  },
+      { sid:'S1005', agentId:'A100005', agent:'ian@outlook.com',   inviter:'-',                type:'ZB', tier:'L2', country:'US', project:'zibt', source:'internal', regTime:'2026-05-20 11:30', dept:'risk',   person:'huangbo',  newRegUsers:12,  deposit:1500.00,  withdraw:300.00,  settledComm:14.40,  tradeUsers:8,   lots:1200.00,   rebate:0,      actualRebate:0,      share:0,        withdrawable:980.00  },
+      { sid:'S1006', agentId:'A100006', agent:'mary@hotmail.com',  inviter:'master001@xx.com', type:'ZB', tier:'L2', country:'VN', project:'zibt', source:'invite',   regTime:'2026-02-14 12:00', dept:'sales',  person:'zhangwei', newRegUsers:25,  deposit:4200.00,  withdraw:850.00,  settledComm:126.30, tradeUsers:18,  lots:8420.30,   rebate:0,      actualRebate:0,      share:0,        withdrawable:680.00  },
+      { sid:'S1007', agentId:'A100007', agent:'peter@qq.com',      inviter:'master001@xx.com', type:'ZB', tier:'L1', country:'MY', project:'zibt', source:'invite',   regTime:'2026-05-18 14:12', dept:'sales',  person:'liuyang',  newRegUsers:3,   deposit:120.00,   withdraw:0,       settledComm:2.70,   tradeUsers:2,   lots:180.00,    rebate:0,      actualRebate:0,      share:18.50,    withdrawable:85.00   },
+      { sid:'S1008', agentId:'A100008', agent:'sara@gmail.com',    inviter:'master005@xx.com', type:'ZB', tier:'L2', country:'IN', project:'zibt', source:'promo',    regTime:'2026-04-18 16:22', dept:'cs',     person:'zhaolei',  newRegUsers:32,  deposit:5200.00,  withdraw:680.00,  settledComm:144.75, tradeUsers:24,  lots:9650.50,   rebate:0,      actualRebate:0,      share:0,        withdrawable:1850.00 },
+      { sid:'S1009', agentId:'A100009', agent:'tom@hotmail.com',   inviter:'-',                type:'ZB', tier:'L2', country:'CN', project:'zibt', source:'internal', regTime:'2026-05-15 09:08', dept:'risk',   person:'huangbo',  newRegUsers:9,   deposit:880.00,   withdraw:0,       settledComm:7.80,   tradeUsers:5,   lots:520.00,    rebate:0,      actualRebate:0,      share:0,        withdrawable:520.00  },
+      { sid:'S1010', agentId:'A100010', agent:'amy@163.com',       inviter:'master002@xx.com', type:'ZB', tier:'L2', country:'CN', project:'zibt', source:'invite',   regTime:'2026-01-28 10:24', dept:'ops',    person:'lina',     newRegUsers:80,  deposit:12500.00, withdraw:2200.00, settledComm:492.75, tradeUsers:65,  lots:32850.00,  rebate:0,      actualRebate:0,      share:0,        withdrawable:3850.00 },
+      { sid:'S1011', agentId:'A100011', agent:'ben@outlook.com',   inviter:'-',                type:'ZB', tier:'L1', country:'TH', project:'zibt', source:'natural',  regTime:'2026-04-20 19:30', dept:'sales',  person:'liuyang',  newRegUsers:6,   deposit:520.00,   withdraw:100.00,  settledComm:9.40,   tradeUsers:4,   lots:625.00,    rebate:0,      actualRebate:0,      share:42.10,    withdrawable:280.00  },
+      { sid:'S1012', agentId:'A100012', agent:'cathy@qq.com',      inviter:'master003@xx.com', type:'ZB', tier:'L2', country:'BR', project:'zibt', source:'invite',   regTime:'2026-03-22 13:55', dept:'cs',     person:'sunmei',   newRegUsers:35,  deposit:6800.00,  withdraw:1500.00, settledComm:213.00, tradeUsers:28,  lots:14200.75,  rebate:0,      actualRebate:0,      share:0,        withdrawable:1280.00 },
+      { sid:'S1013', agentId:'A100013', agent:'derek@gmail.com',   inviter:'master002@xx.com', type:'ZB', tier:'L1', country:'SG', project:'zibt', source:'promo',    regTime:'2026-05-03 08:18', dept:'market', person:'chenjie',  newRegUsers:11,  deposit:1280.00,  withdraw:200.00,  settledComm:27.30,  tradeUsers:7,   lots:1820.00,   rebate:0,      actualRebate:0,      share:96.80,    withdrawable:450.00  },
+      { sid:'S1014', agentId:'A100014', agent:'eva@163.com',       inviter:'master005@xx.com', type:'ZB', tier:'L2', country:'PH', project:'zibt', source:'invite',   regTime:'2026-02-08 17:42', dept:'cs',     person:'zhaolei',  newRegUsers:22,  deposit:3400.00,  withdraw:680.00,  settledComm:78.60,  tradeUsers:16,  lots:5240.50,   rebate:0,      actualRebate:0,      share:0,        withdrawable:880.00  },
+      { sid:'S1015', agentId:'A100015', agent:'kate@outlook.com',  inviter:'master004@xx.com', type:'ZB', tier:'L2', country:'JP', project:'zibt', source:'natural',  regTime:'2025-12-19 09:46', dept:'ops',    person:'wangfang', newRegUsers:55,  deposit:8200.00,  withdraw:1800.00, settledComm:252.00, tradeUsers:42,  lots:16800.00,  rebate:0,      actualRebate:0,      share:0,        withdrawable:2150.00 },
+
+      /* —— IB 代理（6 条） —— */
+      { sid:'S2001', agentId:'I100001', agent:'oscar@gmail.com',   inviter:'-',                type:'IB', tier:'L3', country:'CN', project:'tradewill', source:'invite',   regTime:'2026-02-20 16:48', dept:'ops',    person:'lina',     newRegUsers:120, deposit:25000.00, withdraw:5000.00,  settledComm:850.00,  tradeUsers:85,  lots:120000.00, rebate:280.00, actualRebate:250.00, share:0, withdrawable:5800.00  },
+      { sid:'S2002', agentId:'I100002', agent:'pat@outlook.com',   inviter:'-',                type:'IB', tier:'L2', country:'CN', project:'tradewill', source:'natural',  regTime:'2025-12-10 10:00', dept:'ops',    person:'lina',     newRegUsers:380, deposit:88000.00, withdraw:18000.00, settledComm:3250.00, tradeUsers:280, lots:425000.00, rebate:1180.00,actualRebate:1050.00,share:0, withdrawable:22500.00 },
+      { sid:'S2003', agentId:'I100003', agent:'rachel@163.com',    inviter:'master005@xx.com', type:'IB', tier:'L1', country:'TW', project:'tradewill', source:'invite',   regTime:'2026-01-18 13:11', dept:'ops',    person:'wangfang', newRegUsers:42,  deposit:8500.00,  withdraw:1500.00,  settledComm:380.00,  tradeUsers:32,  lots:42000.00,  rebate:95.00,  actualRebate:85.00,  share:0, withdrawable:1850.00  },
+      { sid:'S2004', agentId:'I100004', agent:'simon@qq.com',      inviter:'master006@xx.com', type:'IB', tier:'L2', country:'HK', project:'tradewill', source:'natural',  regTime:'2026-03-28 15:18', dept:'ops',    person:'wangfang', newRegUsers:60,  deposit:14000.00, withdraw:3000.00,  settledComm:620.00,  tradeUsers:48,  lots:65000.00,  rebate:155.00, actualRebate:140.00, share:0, withdrawable:1800.00  },
+      { sid:'S2005', agentId:'I100005', agent:'tina@gmail.com',    inviter:'master005@xx.com', type:'IB', tier:'L1', country:'PH', project:'tradewill', source:'invite',   regTime:'2026-05-02 10:25', dept:'cs',     person:'sunmei',   newRegUsers:18,  deposit:2400.00,  withdraw:500.00,   settledComm:120.00,  tradeUsers:14,  lots:13500.00,  rebate:32.00,  actualRebate:28.00,  share:0, withdrawable:380.00   },
+      { sid:'S2006', agentId:'I100006', agent:'uri@hotmail.com',   inviter:'-',                type:'IB', tier:'L3', country:'NG', project:'tradewill', source:'natural',  regTime:'2025-10-20 08:30', dept:'ops',    person:'lina',     newRegUsers:95,  deposit:18500.00, withdraw:4200.00,  settledComm:680.00,  tradeUsers:72,  lots:88000.00,  rebate:215.00, actualRebate:190.00, share:0, withdrawable:3200.00  },
+
+      /* —— KOL 代理（5 条） —— */
+      { sid:'S3001', agentId:'K100001', agent:'vince@gmail.com',   inviter:'master003@xx.com', type:'KOL', tier:'senior_promoter', country:'TH', project:'dana', source:'promo',   regTime:'2026-04-25 19:22', dept:'market', person:'chenjie', newRegUsers:85,  deposit:12500.00, withdraw:2000.00,  settledComm:420.00,  tradeUsers:62,  lots:35000.00,  rebate:120.00, actualRebate:105.00, share:0, withdrawable:1850.00 },
+      { sid:'S3002', agentId:'K100002', agent:'wendy@163.com',     inviter:'master003@xx.com', type:'KOL', tier:'user_agent',      country:'BR', project:'dana', source:'promo',   regTime:'2026-04-08 17:42', dept:'market', person:'chenjie', newRegUsers:42,  deposit:5800.00,  withdraw:1000.00,  settledComm:180.00,  tradeUsers:32,  lots:18000.00,  rebate:55.00,  actualRebate:48.00,  share:0, withdrawable:680.00  },
+      { sid:'S3003', agentId:'K100003', agent:'xander@gmail.com',  inviter:'master005@xx.com', type:'KOL', tier:'business_agent',  country:'SG', project:'dana', source:'invite',  regTime:'2025-11-05 09:00', dept:'market', person:'chenjie', newRegUsers:280, deposit:48000.00, withdraw:12000.00, settledComm:2100.00, tradeUsers:215, lots:128500.00, rebate:580.00, actualRebate:520.00, share:0, withdrawable:8800.00 },
+      { sid:'S3004', agentId:'K100004', agent:'yuki@hotmail.com',  inviter:'-',                type:'KOL', tier:'senior_promoter', country:'JP', project:'dana', source:'natural', regTime:'2026-04-30 22:48', dept:'cs',     person:'zhaolei', newRegUsers:38,  deposit:5200.00,  withdraw:800.00,   settledComm:165.00,  tradeUsers:28,  lots:14800.00,  rebate:42.00,  actualRebate:38.00,  share:0, withdrawable:520.00  },
+      { sid:'S3005', agentId:'K100005', agent:'zoe@qq.com',        inviter:'master003@xx.com', type:'KOL', tier:'user_agent',      country:'HK', project:'dana', source:'invite',  regTime:'2026-05-06 13:50', dept:'market', person:'chenjie', newRegUsers:120, deposit:22000.00, withdraw:4500.00,  settledComm:950.00,  tradeUsers:92,  lots:55000.00,  rebate:225.00, actualRebate:200.00, share:0, withdrawable:3200.00 },
+    ];
+
+    /* ============== 列定义表（一份配置驱动多个 tab） ============== */
+    /* 每列：{ width, header(i18n key), help?(i18n key), align?, render(r) } */
+    const C = {
+      inviter:      { width: 180, header: 'report.col.inviter',      render: r => `<td class="nowrap">${r.inviter === '-' ? '<span class="muted">-</span>' : r.inviter}</td>` },
+      agentId:      { width: 100, header: 'report.col.agentId',      render: r => `<td class="num">${r.agentId}</td>` },
+      agent:        { width: 200, header: 'report.col.agent',        render: r => `<td class="nowrap">${r.agent}</td>` },
+      country:      { width: 110, header: 'report.col.country',      render: r => `<td>${countryTag(r.country)}</td>` },
+      project:      { width: 80,  header: 'report.col.project',      render: r => `<td><span class="proj-tag">${projectName(r.project)}</span></td>` },
+      salesDept:    { width: 150, header: 'report.col.salesDept',    render: r => `<td class="nowrap small">${deptName(r.dept)} / ${personName(r.person)}</td>` },
+      regTime:      { width: 160, header: 'report.col.regTime',      render: r => `<td class="num small nowrap">${r.regTime}</td>` },
+      tier:         { width: 110, header: 'report.col.tier',         align: 'center', render: r => `<td class="text-center">${tierTag(r.tier)}</td>` },
+      newRegUsers:  { width: 110, header: 'report.col.newRegUsers',  help: 'report.help.newRegUsers',  align: 'right',  render: r => `<td class="num text-right">${fmtNum(r.newRegUsers)}</td>` },
+      deposit:      { width: 150, header: 'report.col.deposit',      help: 'report.help.deposit',      align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.deposit)}</td>` },
+      withdraw:     { width: 150, header: 'report.col.withdraw',     help: 'report.help.withdraw',     align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.withdraw)}</td>` },
+      netDeposit:   { width: 140, header: 'report.col.netDeposit',   align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.deposit - r.withdraw)}</td>` },
+      settledComm:  { width: 160, header: 'report.col.settledComm',  help: 'report.help.settledComm',  align: 'right',  render: r => `<td class="num text-right strong">${fmtUSDT(r.settledComm)}</td>` },
+      tradeUsers:   { width: 130, header: 'report.col.tradeUsers',   help: 'report.help.tradeUsers',   align: 'right',  render: r => `<td class="num text-right">${fmtNum(r.tradeUsers)}</td>` },
+      lots:         { width: 140, header: 'report.col.lots',         align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.lots)}</td>` },
+      share:        { width: 130, header: 'report.col.share',        help: 'report.help.share',        align: 'right',  render: r => `<td class="num text-right ${hasShare(r) ? 'strong' : ''}">${hasShare(r) ? fmtUSDT(r.share) : '<span class="muted">-</span>'}</td>` },
+      rebate:       { width: 130, header: 'report.col.rebate',       align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.rebate)}</td>` },
+      actualRebate: { width: 140, header: 'report.col.actualRebate', align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.actualRebate)}</td>` },
+      withdrawable: { width: 160, header: 'report.col.withdrawable', help: 'report.help.withdrawable', align: 'right',  render: r => `<td class="num text-right">${fmtUSDT(r.withdrawable)}</td>` },
+    };
+
+    /* 各 tab 的列顺序：ZB 含 share 不含 rebate；IB / KOL 反之 */
+    const SCHEMA_BY_TYPE = {
+      ZB:  ['inviter','agentId','agent','country','project','salesDept','regTime','tier',
+            'newRegUsers','deposit','withdraw','netDeposit','settledComm','tradeUsers','lots','share','withdrawable'],
+      IB:  ['inviter','agentId','agent','country','project','salesDept','regTime','tier',
+            'newRegUsers','deposit','withdraw','netDeposit','settledComm','tradeUsers','lots','rebate','actualRebate','withdrawable'],
+      KOL: ['inviter','agentId','agent','country','project','salesDept','regTime','tier',
+            'newRegUsers','deposit','withdraw','netDeposit','settledComm','tradeUsers','lots','rebate','actualRebate','withdrawable'],
+    };
+
+    /* ============== 汇总：根据 type 决定指标项 ============== */
+    function calcSummary(data, type) {
+      const s = { regUsers:0, tradeUsers:0, lots:0, settledComm:0, settledShare:0, rebate:0, deposit:0, withdraw:0 };
+      data.forEach(r => {
+        s.regUsers     += r.newRegUsers;
+        s.tradeUsers   += r.tradeUsers;
+        s.lots         += r.lots;
+        s.settledComm  += r.settledComm;
+        if (type === 'ZB' && hasShare(r)) s.settledShare += r.share;
+        if (type !== 'ZB')                s.rebate       += r.rebate;
+        s.deposit      += r.deposit;
+        s.withdraw     += r.withdraw;
+      });
+      return s;
+    }
+    function renderSummary(data, type) {
+      const s = calcSummary(data, type);
+      const item = (label, val) =>
+        `<span class="sum-item"><span class="sum-k">${label}:</span> <b class="sum-v">${val}</b></span>`;
+      const items = [
+        item(t('report.summary.regUsers'),    fmtNum(s.regUsers)),
+        item(t('report.summary.tradeUsers'),  fmtNum(s.tradeUsers)),
+        item(t('report.summary.lots'),        s.lots.toFixed(2)),
+        item(t('report.summary.settledComm'), s.settledComm.toFixed(2)),
+        /* 类型专属：ZB → 已结算分成；IB/KOL → 返利总额 */
+        type === 'ZB'
+          ? item(t('report.summary.settledShare'), s.settledShare.toFixed(2))
+          : item(t('report.summary.rebate'),       s.rebate.toFixed(2)),
+        item(t('report.summary.deposit'),     s.deposit.toFixed(2)),
+        item(t('report.summary.withdraw'),    s.withdraw.toFixed(2)),
+        item(t('report.summary.netDeposit'), (s.deposit - s.withdraw).toFixed(2)),
+      ];
+      return `
+        <div class="result-summary">
+          <span class="sum-title">${t('report.summary.title')}</span>
+          ${items.join('')}
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：表格 ============== */
+    function renderHeader(col) {
+      const cls  = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
+      const help = col.help ? `<span class="th-help" title="${t(col.help)}">?</span>` : '';
+      return `<th class="${cls}">${help}${t(col.header)}</th>`;
+    }
+    function renderTable(data, type) {
+      if (!data.length) {
+        return `<div class="empty-state"><div class="empty-icon">📊</div>暂无 ${type} 代理数据</div>`;
+      }
+      const cols = SCHEMA_BY_TYPE[type].map(k => C[k]);
+      const rows = data.map(r => `<tr>${cols.map(c => c.render(r)).join('')}</tr>`).join('');
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <colgroup>${cols.map(c => `<col style="width:${c.width}px">`).join('')}</colgroup>
+            <thead><tr>${cols.map(renderHeader).join('')}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function pagination(total) {
+      const totalPages = Math.max(1, Math.ceil(total / 20));
+      return `
+        <div class="pagination">
+          <span class="page-info">共 <b>${total}</b> 条 / <b>${totalPages}</b> 页</span>
+          <div class="page-btns">
+            <button class="page-btn">«</button>
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">›</button>
+            <button class="page-btn">»</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：单个 tab 的筛选块（独立 ID） ============== */
+    function renderFilterBlock(type) {
+      const tiers = tiersForType(type);
+      return `
+        <div class="filter-block" id="filterBlock-${type}">
+          <div class="filter-row filter-row-1">
+            <select class="form-select filter-input" id="fProject-${type}">
+              <option value="">${t('report.filter.project')}</option>
+              ${PROJECTS.map(p => `<option value="${p.key}">${p.name}</option>`).join('')}
+            </select>
+            <input  class="form-input filter-input"  id="fSid-${type}"   placeholder="${t('report.filter.sid')}" />
+            <input  class="form-input filter-input"  id="fEmail-${type}" placeholder="${t('report.filter.agentEmail')}" />
+            <select class="form-select filter-input" id="fSource-${type}">
+              <option value="">${t('report.filter.source')}</option>
+              ${SOURCES.map(s => `<option value="${s}">${t('agents.source.' + s)}</option>`).join('')}
+            </select>
+            <select class="form-select filter-input" id="fRegion-${type}">
+              <option value="">${t('report.filter.regRegion')}</option>
+              ${COUNTRIES.map(c => `<option value="${c}">${c} · ${t('agents.country.' + c)}</option>`).join('')}
+            </select>
+            <select class="form-select filter-input" id="fDept-${type}">
+              <option value="">${t('report.filter.dept')}</option>
+              ${DEPTS.map(d => `<option value="${d}">${t('agents.dept.' + d)}</option>`).join('')}
+            </select>
+            <select class="form-select filter-input" id="fPerson-${type}">
+              <option value="">${t('report.filter.person')}</option>
+              ${ALL_PERSONS.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="filter-row filter-row-2">
+            <div class="date-range">
+              <div class="date-input-wrap">
+                <span class="date-ico">📅</span>
+                <input class="dt-input" type="date" id="fDateFrom-${type}" value="2026-05-22" />
+              </div>
+              <span class="dt-sep">~</span>
+              <div class="date-input-wrap">
+                <input class="dt-input" type="date" id="fDateTo-${type}" value="2026-05-22" />
+              </div>
+            </div>
+            <select class="form-select filter-input" id="fTier-${type}">
+              <option value="">${t('report.filter.agentTier')}</option>
+              ${tiers.map(x => `<option value="${x}">${t('myAgent.tier.' + x.toLowerCase())}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="filter-bottom">
+            <button class="btn-export" data-act="export" data-type="${type}">
+              <svg viewBox="0 0 16 16" width="14" height="14" style="vertical-align:-2px;margin-right:4px">
+                <path d="M8 1v10M3 6l5 5 5-5M2 14h12" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              ${t('report.btn.export')}
+            </button>
+            <button class="btn-toggle" data-act="toggle-filter" data-type="${type}">
+              <span id="toggleLabel-${type}">${t('agents.btn.collapse')}</span>
+              <svg id="toggleIco-${type}" viewBox="0 0 16 16" width="12" height="12" style="transform:rotate(180deg);transition:transform .2s">
+                <path d="M3 6l5 5 5-5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <div class="filter-actions">
+              <button class="btn-reset" data-act="reset"  data-type="${type}">${t('common.reset')}</button>
+              <button class="btn-query" data-act="search" data-type="${type}">${t('common.search')}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：单个 tab 的 pane ============== */
+    function renderPane(type, active) {
+      return `
+        <div class="biz-pane" id="pane-${type}" data-type="${type}"${active ? '' : ' style="display:none"'}>
+          ${renderFilterBlock(type)}
+          <div id="summaryArea-${type}"></div>
+          <div id="tableArea-${type}"></div>
+          <div id="paginationArea-${type}"></div>
+        </div>
+      `;
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.reports-agent-perf.title')}</h1>
+        <p class="page-desc">${t('page.reports-agent-perf.desc')}</p>
+      </div>
+
+      <div class="card sec-card">
+        <!-- ===== 业务类型 Tab ===== -->
+        <div class="biz-tabs" role="tablist">
+          ${TYPES.map((tp, i) => `
+            <button class="biz-tab ${i===0 ? 'active' : ''}" data-type="${tp}">
+              ${tp} <span class="biz-tab-count" id="cnt-${tp}"></span>
+            </button>
+          `).join('')}
+        </div>
+
+        <!-- ===== 每个业务类型独立一个 pane（含独立筛选 + 汇总 + 表格 + 分页） ===== -->
+        ${TYPES.map((tp, i) => renderPane(tp, i === 0)).join('')}
+      </div>
+    `;
+
+    let currentType = 'ZB';
+
+    /* 一次性渲染所有 3 个 tab 的汇总 + 表格 + 分页 + 条数徽标 */
+    function refresh() {
+      TYPES.forEach(tp => {
+        const data = ROWS.filter(r => r.type === tp);
+        document.getElementById('summaryArea-' + tp).innerHTML    = renderSummary(data, tp);
+        document.getElementById('tableArea-' + tp).innerHTML      = renderTable(data, tp);
+        document.getElementById('paginationArea-' + tp).innerHTML = pagination(data.length);
+        const cntEl = document.getElementById('cnt-' + tp);
+        if (cntEl) cntEl.textContent = `(${data.length})`;
+      });
+      setupDragScroll();
+    }
+
+    /* ============== 拖拽横向滚动（每个 .table-wrap 都挂） ============== */
+    const _drag = { wrap: null, down: false, moved: false, sx: 0, sl: 0 };
+    document.addEventListener('mouseup', () => {
+      if (_drag.down) {
+        _drag.down = false;
+        _drag.wrap && _drag.wrap.classList.remove('dragging');
+      }
+    });
+    function setupDragScroll() {
+      document.querySelectorAll('.table-wrap').forEach(wrap => {
+        wrap.addEventListener('mousedown', (e) => {
+          if (e.target.closest('button, a, input, select, textarea')) return;
+          _drag.wrap  = wrap;
+          _drag.down  = true;
+          _drag.moved = false;
+          _drag.sx    = e.pageX - wrap.offsetLeft;
+          _drag.sl    = wrap.scrollLeft;
+          wrap.classList.add('dragging');
+        });
+        wrap.addEventListener('mousemove', (e) => {
+          if (!_drag.down || _drag.wrap !== wrap) return;
+          e.preventDefault();
+          const x = e.pageX - wrap.offsetLeft;
+          const walk = x - _drag.sx;
+          if (Math.abs(walk) > 3) _drag.moved = true;
+          wrap.scrollLeft = _drag.sl - walk;
+        });
+        wrap.addEventListener('click', (e) => {
+          if (_drag.moved && _drag.wrap === wrap) {
+            e.stopPropagation(); e.preventDefault();
+            _drag.moved = false;
+          }
+        }, true);
+      });
+    }
+
+    /* 部门 → 个人：仅作用于指定 type 的 pane */
+    function rebuildPersonOptions(type) {
+      const sel  = document.getElementById('fPerson-' + type);
+      const dept = document.getElementById('fDept-' + type).value;
+      const list = personsForDept(dept);
+      sel.innerHTML =
+        `<option value="">${t('report.filter.person')}</option>` +
+        list.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+      sel.value = '';
+    }
+
+    /* ============== 展开 / 收起（每个 tab 独立持久化） ============== */
+    const FILTER_STATE_KEY = 'zb_admin_report_filter_expanded';
+    function setFilterExpanded(type, expanded) {
+      const block = document.getElementById('filterBlock-' + type);
+      if (!block) return;
+      block.classList.toggle('collapsed', !expanded);
+      document.getElementById('toggleLabel-' + type).textContent =
+        expanded ? t('agents.btn.collapse') : t('agents.btn.expand');
+      document.getElementById('toggleIco-' + type).style.transform =
+        expanded ? 'rotate(180deg)' : 'rotate(0deg)';
+      try { localStorage.setItem(`${FILTER_STATE_KEY}_${type}`, expanded ? '1' : '0'); } catch (e) {}
+    }
+
+    /* ============== 入口 ============== */
+    /* 重置按钮要清空的字段名（不含 type 后缀；日期单独处理） */
+    const FILTER_FIELDS  = ['fProject','fSid','fEmail','fSource','fRegion','fDept','fPerson','fTier'];
+    const DATE_DEFAULTS  = { fDateFrom: '2026-05-22', fDateTo: '2026-05-22' };
+
+    window.onPageReady = function () {
+      refresh();
+
+      /* 各 tab 的展开/收起初始状态（默认展开） */
+      TYPES.forEach(tp => {
+        const saved = (() => { try { return localStorage.getItem(`${FILTER_STATE_KEY}_${tp}`); } catch (e) { return null; } })();
+        setFilterExpanded(tp, saved !== '0');
+      });
+
+      /* Tab 切换：仅切换 pane 显隐 + active 样式（数据已经渲染好） */
+      document.querySelectorAll('.biz-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.type === currentType) return;
+          currentType = btn.dataset.type;
+          document.querySelectorAll('.biz-tab').forEach(b =>
+            b.classList.toggle('active', b.dataset.type === currentType)
+          );
+          document.querySelectorAll('.biz-pane').forEach(p =>
+            p.style.display = (p.dataset.type === currentType) ? '' : 'none'
+          );
+        });
+      });
+
+      /* 事件委托：toggle-filter / reset / search / export 按 data-type 作用于对应 pane */
+      document.body.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-act]');
+        if (!btn) return;
+        const type = btn.dataset.type;
+        if (!type || !TYPES.includes(type)) return;
+        const act = btn.dataset.act;
+
+        if (act === 'toggle-filter') {
+          const collapsed = document.getElementById('filterBlock-' + type).classList.contains('collapsed');
+          setFilterExpanded(type, collapsed);
+        }
+        else if (act === 'reset') {
+          FILTER_FIELDS.forEach(id => {
+            const el = document.getElementById(`${id}-${type}`);
+            if (el) el.value = '';
+          });
+          Object.entries(DATE_DEFAULTS).forEach(([id, val]) => {
+            const el = document.getElementById(`${id}-${type}`);
+            if (el) el.value = val;
+          });
+          rebuildPersonOptions(type);
+          toast(t('toast.reset'), 'success');
+        }
+        else if (act === 'search') {
+          toast(t('toast.searched'), 'success');
+        }
+        else if (act === 'export') {
+          toast(t('report.toast.exported') + `（${type}）`, 'success');
+        }
+      });
+
+      /* 部门 → 个人 联动（每个 pane 独立挂监听） */
+      TYPES.forEach(tp => {
+        const dept = document.getElementById('fDept-' + tp);
+        if (dept) dept.addEventListener('change', () => rebuildPersonOptions(tp));
+      });
+
+      /* 分页 mock 提示（事件委托） */
+      document.body.addEventListener('click', (e) => {
+        const b = e.target.closest('.page-btn');
+        if (!b || b.classList.contains('active')) return;
+        toast(t('toast.pagePlaceholder'), 'success');
+      });
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* ============== 层级 / 国家 / 项目 标签 ============== */
+    .tier-tag {
+      display: inline-block; padding: 2px 9px; border-radius: 10px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-bold); color: #fff;
+    }
+    .tier-l1   { background: #5bc0de; }
+    .tier-l2   { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+    .tier-l3   { background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%); }
+    .tier-l4   { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%); }
+    .tier-l5   { background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%); }
+    .tier-test { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+    .tier-kol-1 { background: linear-gradient(135deg, #f87171 0%, #dc2626 100%); }
+    .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); }
+    .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); }
+
+    .proj-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: var(--fs-body-sm); background: #f0f9ff; color: #0369a1;
+      font-weight: var(--fw-medium);
+    }
+    .ctr-tag {
+      display: inline-block; padding: 2px 7px; border-radius: 3px;
+      font-size: 11.5px; font-weight: var(--fw-medium);
+      background: #f8fafc; color: #334155;
+      border: 1px solid #e2e8f0;
+      font-family: ui-monospace, monospace;
+      white-space: nowrap;
+    }
+
+    .num    { font-family: ui-monospace, monospace; }
+    .small  { font-size: var(--fs-body-sm); }
+    .strong { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .muted  { color: var(--color-text-muted); }
+    .nowrap { white-space: nowrap; }
+
+    /* ============== 表头帮助图标 ============== */
+    .th-help {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; margin-right: 3px; border-radius: 50%;
+      background: #94a3b8; color: #fff;
+      font-size: 10px; font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+      cursor: help; vertical-align: middle;
+    }
+    .th-help:hover { background: var(--color-primary); }
+
+    /* ============== 业务类型 Tab ============== */
+    .biz-tabs {
+      display: flex; gap: 2px;
+      border-bottom: 1px solid var(--color-border);
+      margin: 6px 0 0;
+    }
+    .biz-tab {
+      padding: 10px 22px;
+      font-size: var(--fs-body);
+      color: var(--color-text-secondary);
+      background: transparent; border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: -1px;
+      font-family: inherit;
+      font-weight: var(--fw-medium);
+    }
+    .biz-tab:hover { color: var(--color-primary); }
+    .biz-tab.active {
+      color: var(--color-primary);
+      font-weight: var(--fw-bold);
+      border-bottom-color: var(--color-primary);
+    }
+    .biz-tab-count {
+      color: var(--color-text-muted);
+      font-size: var(--fs-meta);
+      margin-left: 4px;
+      font-weight: var(--fw-normal);
+    }
+    .biz-tab.active .biz-tab-count { color: var(--color-primary); }
+
+    /* ============== 双行筛选 + 展开/收起 ============== */
+    .filter-block { position: relative; margin-bottom: 4px; }
+    .filter-block .filter-row { margin-bottom: 10px; }
+    .filter-block .filter-row + .filter-row { margin-top: 0; }
+    .filter-block.collapsed .filter-row-2 { display: none; }
+
+    .date-range {
+      display: flex; align-items: center; gap: 4px;
+      min-width: 280px;
+    }
+    .date-range .date-input-wrap { padding: 4px 10px; }
+    .date-range .dt-input { width: 105px; }
+
+    .filter-bottom {
+      display: flex; align-items: center; gap: 12px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--color-border);
+      margin-top: 4px;
+    }
+    .btn-toggle {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 6px 10px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--color-text-muted);
+      font-size: var(--fs-body-sm); font-family: inherit;
+      border-radius: 4px; transition: all .15s;
+    }
+    .btn-toggle:hover { color: var(--color-primary); background: #f0f9ff; }
+    .filter-bottom .filter-actions { margin-left: auto; }
+
+    /* 导出按钮 */
+    .btn-export {
+      display: inline-flex; align-items: center;
+      padding: 7px 16px;
+      font-size: var(--fs-body); font-family: inherit;
+      color: #fff; background: var(--color-primary);
+      border: none; border-radius: 6px; cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-export:hover { background: var(--color-primary-hover); }
+
+    /* ============== 查询结果汇总 ============== */
+    .result-summary {
+      display: flex; flex-wrap: wrap;
+      align-items: center; gap: 6px 22px;
+      padding: 12px 14px;
+      margin: 14px 0;
+      background: #fef7f0;
+      border: 1px solid #fde2c4;
+      border-radius: 6px;
+      font-size: var(--fs-body-sm);
+      line-height: 1.6;
+    }
+    .sum-title {
+      color: #dc2626;
+      font-weight: var(--fw-bold);
+      margin-right: 4px;
+    }
+    .sum-item { display: inline-flex; align-items: baseline; gap: 4px; }
+    .sum-k { color: var(--color-text-secondary); }
+    .sum-v {
+      color: var(--color-text);
+      font-family: ui-monospace, monospace;
+      font-weight: var(--fw-bold);
+    }
+
+    /* ============== 表格横向滚动（带拖拽） ============== */
+    .table-wrap {
+      overflow-x: auto;
+      cursor: grab;
+      -webkit-overflow-scrolling: touch;
+    }
+    .table-wrap.dragging { cursor: grabbing; user-select: none; }
+    .table-wrap.dragging * { cursor: grabbing !important; }
+    .table-wrap button, .table-wrap a, .table-wrap input, .table-wrap select { cursor: pointer; }
+    .table-wrap::-webkit-scrollbar { height: 10px; }
+    .table-wrap::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 0 0 8px 8px; }
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: #cbd5e1; border-radius: 5px;
+      border: 2px solid #f1f5f9;
+    }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .table-wrap { scrollbar-color: #cbd5e1 #f1f5f9; scrollbar-width: thin; }
+  </style>
+</body>
+</html>

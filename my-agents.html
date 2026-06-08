@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>我的代理</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.my-agents.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=10"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    (function() { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============== Toast ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    function fmtUSD(v)  { return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function fmtUSDT(v) { return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT'; }
+    // 按代理类型展示币种：ZB → USDT，其他（KOL/IB）→ USD
+    function fmtMoney(v, type) { return type === 'ZB' ? fmtUSDT(v) : fmtUSD(v); }
+    // 兼容旧别名
+    const fmtWithdrawable = fmtMoney;
+
+    /* ============== 字典 ============== */
+    const TYPES = ['KOL', 'IB', 'ZB'];
+    // 各代理类型的可用层级（联动用）
+    const TIERS_BY_TYPE = {
+      ZB:  ['L1', 'L2'],
+      IB:  ['L1', 'L2', 'L3'],
+      KOL: ['senior_promoter', 'user_agent', 'business_agent'],
+    };
+    // 所有层级（未选类型时使用 = 合并去重）
+    const TIERS_ALL = (() => {
+      const set = new Set();
+      Object.values(TIERS_BY_TYPE).forEach(arr => arr.forEach(t => set.add(t)));
+      return [...set];
+    })();
+    function tiersForType(type) {
+      if (!type) return TIERS_ALL;
+      return TIERS_BY_TYPE[type] || [];
+    }
+    const PROJECTS = [
+      { key: 'dana',      name: 'Dana' },
+      { key: 'tradewill', name: 'Tradewill' },
+      { key: 'zibt',      name: 'ZIBT' },
+    ];
+    const REGIONS = [
+      { code: '+86',  label: 'CN' }, { code: '+852', label: 'HK' }, { code: '+91',  label: 'IN' },
+      { code: '+62',  label: 'ID' }, { code: '+66',  label: 'TH' }, { code: '+60',  label: 'MY' },
+      { code: '+84',  label: 'VN' }, { code: '+63',  label: 'PH' }, { code: '+880', label: 'BD' },
+      { code: '+95',  label: 'MM' }, { code: '+234', label: 'NG' }, { code: '+52',  label: 'MX' },
+      { code: '+55',  label: 'BR' }, { code: '+1',   label: 'US' },
+    ];
+    // 可移交的管理员（mock：来自系统用户）
+    const ADMINS = [
+      { id: 'admin',   name: 'admin (张三)',  nameEn: 'admin (Zhang San)' },
+      { id: 'ops001',  name: 'ops001 (李四)', nameEn: 'ops001 (Li Si)' },
+      { id: 'cs001',   name: 'cs001 (王五)',  nameEn: 'cs001 (Wang Wu)' },
+      { id: 'risk001', name: 'risk001 (赵六)',nameEn: 'risk001 (Zhao Liu)' },
+    ];
+
+    /* ============== Mock 数据 ============== */
+    const MY_AGENTS_KEY = 'zb_admin_my_agents_v4';
+    /* share：仅 ZB 一级代理可获得（来自下级 L2 代理的佣金分成）；其余角色为 0 */
+    const DEFAULT_AGENTS = [
+      { id: 1,  email: 'alice@gmail.com',   type: 'ZB', tier: 'L2',   joinDate: '2026-03-15', invited: 105, commission: 5234.56,  share: 0,        withdrawable: 1280.50,   commMonth: 850.20,   newUsersMonth: 12, parent: 'master001@xx.com', project: 'zibt', region: '+91',  status: 1, admin: 'admin' },
+      { id: 2,  email: 'bob@outlook.com',   type: 'ZB', tier: 'L1',   joinDate: '2026-04-02', invited: 32,  commission: 1250.00,  share: 2450.75,  withdrawable: 320.00,    commMonth: 280.50,   newUsersMonth: 5,  parent: '-',                  project: 'zibt', region: '+62',  status: 1, admin: 'admin' },
+      { id: 3,  email: 'charlie@163.com',   type: 'ZB', tier: 'L1',   joinDate: '2026-02-20', invited: 520, commission: 25600.80, share: 18420.30, withdrawable: 6800.00,   commMonth: 4200.00,  newUsersMonth: 38, parent: 'master002@xx.com', project: 'zibt', region: '+86',  status: 1, admin: 'admin' },
+      { id: 4,  email: 'david@qq.com',      type: 'ZB', tier: 'L2',   joinDate: '2025-12-10', invited: 1620,commission: 88500.00, share: 0,        withdrawable: 22500.00,  commMonth: 12500.00, newUsersMonth: 86, parent: '-',                  project: 'zibt', region: '+86',  status: 1, admin: 'admin' },
+      { id: 5,  email: 'evan@hotmail.com',  type: 'ZB', tier: 'L2',   joinDate: '2026-04-25', invited: 65,  commission: 2880.50,  share: 0,        withdrawable: 580.00,    commMonth: 580.00,   newUsersMonth: 9,  parent: 'master003@xx.com', project: 'zibt', region: '+66',  status: 0, admin: 'admin' },
+      { id: 6,  email: 'frank@gmail.com',   type: 'ZB', tier: 'L1',   joinDate: '2026-05-08', invited: 18,  commission: 480.00,   share: 1280.40,  withdrawable: 480.00,    commMonth: 480.00,   newUsersMonth: 18, parent: 'master001@xx.com', project: 'zibt', region: '+91',  status: 1, admin: 'admin' },
+      { id: 7,  email: 'grace@163.com',     type: 'ZB', tier: 'L2',   joinDate: '2026-01-18', invited: 220, commission: 8200.00,  share: 0,        withdrawable: 1850.00,   commMonth: 1850.00,  newUsersMonth: 22, parent: 'master002@xx.com', project: 'zibt', region: '+886', status: 1, admin: 'admin' },
+      { id: 8,  email: 'helen@gmail.com',   type: 'ZB', tier: 'L1',   joinDate: '2026-05-14', invited: 8,   commission: 120.00,   share: 0,        withdrawable: 120.00,    commMonth: 120.00,   newUsersMonth: 8,  parent: 'master004@xx.com', project: 'zibt', region: '+62',  status: 1, admin: 'admin' },
+      { id: 9,  email: 'ian@outlook.com',   type: 'ZB', tier: 'L2',   joinDate: '2026-05-20', invited: 45,  commission: 3600.00,  share: 0,        withdrawable: 3600.00,   commMonth: 3600.00,  newUsersMonth: 45, parent: '-',                  project: 'zibt', region: '+1',   status: 1, admin: 'admin' },
+      { id: 10, email: 'jane@163.com',      type: 'ZB', tier: 'L1',   joinDate: '2026-04-08', invited: 42,  commission: 1500.00,  share: 3680.20,  withdrawable: 320.00,    commMonth: 320.00,   newUsersMonth: 6,  parent: 'master003@xx.com', project: 'zibt', region: '+55',  status: 0, admin: 'admin' },
+    ];
+
+    function loadAgents() {
+      try {
+        const d = JSON.parse(localStorage.getItem(MY_AGENTS_KEY));
+        if (Array.isArray(d) && d.length) return d;
+      } catch (e) {}
+      return DEFAULT_AGENTS.slice();
+    }
+    function saveAgents(arr) {
+      try { localStorage.setItem(MY_AGENTS_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    let AGENTS = loadAgents();
+    let editingId = null;
+
+    /* ============== KPI 计算 ============== */
+    function kpis() {
+      const total = AGENTS.length;
+      // 本月新增（按 joinDate 月份判断）
+      const now = new Date();
+      const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      const newM = AGENTS.filter(a => a.joinDate.startsWith(ym)).length;
+      const totalInvited = AGENTS.reduce((s, a) => s + a.invited, 0);
+      const monthComm = AGENTS.reduce((s, a) => s + a.commMonth, 0);
+      return { total, newM, totalInvited, monthComm };
+    }
+
+    /* ============== 渲染 ============== */
+    function renderKpiCards() {
+      const k = kpis();
+      return `
+        <div class="kpi-grid">
+          ${kpiCard('users', t('myAgent.kpi.totalAgents'), k.total, t('myAgent.kpi.unit.person'))}
+          ${kpiCard('plus',  t('myAgent.kpi.newThisMonth'), k.newM, t('myAgent.kpi.unit.person'), 'highlight')}
+          ${kpiCard('group', t('myAgent.kpi.totalInvited'), k.totalInvited.toLocaleString(), t('myAgent.kpi.unit.person'))}
+        </div>
+      `;
+    }
+    function kpiCard(icon, label, value, unit, cls) {
+      const icons = {
+        users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+        plus:  '<line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+        group: '<circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="17" cy="9" r="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M3 19c0-3 3-5 6-5s6 2 6 5 M14 19c0-2 2.5-3.5 4-3.5s3 1 3 3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/>',
+        money: '<path d="M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+      };
+      return `
+        <div class="kpi-card ${cls || ''}">
+          <div class="kpi-ico"><svg viewBox="0 0 24 24" width="20" height="20">${icons[icon]}</svg></div>
+          <div class="kpi-main">
+            <div class="kpi-label">${label}</div>
+            <div class="kpi-num">${value}${unit ? `<span class="kpi-u">${unit}</span>` : ''}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function typeTag(type) {
+      const map = { KOL: 'tt-kol', IB: 'tt-ib', ZB: 'tt-zb' };
+      return `<span class="type-tag ${map[type]||''}">${type}</span>`;
+    }
+    function tierTag(tier) {
+      // 兼容 ZB / IB 的 L1~L5、test，以及 KOL 的 3 种命名层级
+      const map = {
+        L1: 'tier-l1', L2: 'tier-l2', L3: 'tier-l3', L4: 'tier-l4', L5: 'tier-l5',
+        test: 'tier-test',
+        senior_promoter: 'tier-kol-1',
+        user_agent:      'tier-kol-2',
+        business_agent:  'tier-kol-3',
+      };
+      return `<span class="tier-tag ${map[tier]||''}">${t('myAgent.tier.' + tier.toLowerCase())}</span>`;
+    }
+    function projectName(key) { const p = PROJECTS.find(x => x.key === key); return p ? p.name : key; }
+    function regionLabel(code) {
+      const r = REGIONS.find(x => x.code === code);
+      return r ? `${code} (${r.label})` : code;
+    }
+
+    function renderTable() {
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <colgroup>
+              <col style="width:12%">
+              <col style="width:5%">
+              <col style="width:6%">
+              <col style="width:8%">
+              <col style="width:6%">
+              <col style="width:9%">
+              <col style="width:9%">
+              <col style="width:9%">
+              <col style="width:10%">
+              <col style="width:6%">
+              <col style="width:6%">
+              <col style="width:6%">
+              <col style="width:8%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>${t('myAgent.col.email')}</th>
+                <th class="text-center">${t('myAgent.col.type')}</th>
+                <th class="text-center">${t('myAgent.col.tier')}</th>
+                <th>${t('myAgent.col.joinDate')}</th>
+                <th class="text-right">${t('myAgent.col.invitedCount')}</th>
+                <th class="text-right">${t('myAgent.col.commission')}</th>
+                <th class="text-right">
+                  <span class="th-help" title="${t('myAgent.col.shareTip')}">?</span>${t('myAgent.col.share')}
+                </th>
+                <th class="text-right">${t('myAgent.col.withdrawable')}</th>
+                <th>${t('myAgent.col.parent')}</th>
+                <th>${t('myAgent.col.project')}</th>
+                <th>${t('myAgent.col.region')}</th>
+                <th class="text-center">${t('myAgent.col.status')}</th>
+                <th class="text-center">${t('myAgent.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${AGENTS.length ? AGENTS.map((a) => `
+                <tr data-id="${a.id}">
+                  <td><span class="link-text">${a.email}</span></td>
+                  <td class="text-center">${typeTag(a.type)}</td>
+                  <td class="text-center">${tierTag(a.tier)}</td>
+                  <td class="muted">${a.joinDate}</td>
+                  <td class="text-right num"><b>${a.invited.toLocaleString()}</b></td>
+                  <td class="text-right num strong">${fmtMoney(a.commission, a.type)}</td>
+                  <td class="text-right num ${hasShare(a) ? 'strong' : ''}">${
+                    hasShare(a) ? fmtMoney(a.share, a.type) : '<span class="muted">-</span>'
+                  }</td>
+                  <td class="text-right num strong">${fmtMoney(a.withdrawable, a.type)}</td>
+                  <td class="muted small">${a.parent}</td>
+                  <td><span class="proj-tag">${projectName(a.project)}</span></td>
+                  <td><span class="region-tag">${regionLabel(a.region)}</span></td>
+                  <td class="text-center">
+                    <span class="st-tag ${a.status ? 'st-active' : 'st-disabled'}">
+                      ${a.status ? t('myAgent.status.normal') : t('myAgent.status.frozen')}
+                    </span>
+                  </td>
+                  <td class="text-center">
+                    <button class="t-act" data-act="view" data-id="${a.id}">${t('myAgent.btn.view')}</button>
+                  </td>
+                </tr>
+              `).join('') : emptyRow(13)}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /* 仅 ZB 一级代理可获得分成（来自下级 L2 代理的佣金分成） */
+    function hasShare(a) { return a.type === 'ZB' && a.tier === 'L1'; }
+    function emptyRow(cols) {
+      return `
+        <tr class="empty-row">
+          <td colspan="${cols}">
+            <div class="empty-cell">
+              <svg viewBox="0 0 64 64" width="48" height="48" class="empty-svg">
+                <rect x="8" y="14" width="48" height="38" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+              </svg>
+              <span>${t('myAgent.empty')}</span>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+    function pagination(total) {
+      const totalPages = Math.max(1, Math.ceil(total / 20));
+      return `
+        <div class="pagination">
+          <span class="page-info">共 <b>${total}</b> 条 / <b>${totalPages}</b> 页</span>
+          <div class="page-btns">
+            <button class="page-btn">«</button>
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">›</button>
+            <button class="page-btn">»</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.my-agents.title')}</h1>
+        <p class="page-desc">${t('page.my-agents.desc')}</p>
+      </div>
+
+      <!-- KPI -->
+      <div id="kpiArea"></div>
+
+      <div class="card sec-card">
+        <!-- 筛选 -->
+        <div class="filter-row">
+          <input type="text" class="form-input filter-input" placeholder="${t('myAgent.filter.email')}" id="kw" />
+          <select class="form-select filter-input" id="filterType">
+            <option value="">${t('myAgent.filter.type')}</option>
+            ${TYPES.map(x => `<option>${x}</option>`).join('')}
+          </select>
+          <select class="form-select filter-input" id="filterTier">
+            <option value="">${t('myAgent.filter.tier')}</option>
+            ${TIERS_ALL.map(x => `<option value="${x}">${t('myAgent.tier.' + x.toLowerCase())}</option>`).join('')}
+          </select>
+          <select class="form-select filter-input" id="filterProject">
+            <option value="">${t('myAgent.filter.project')}</option>
+            ${PROJECTS.map(p => `<option value="${p.key}">${p.name}</option>`).join('')}
+          </select>
+          <select class="form-select filter-input" id="filterRegion">
+            <option value="">${t('myAgent.filter.region')}</option>
+            ${REGIONS.map(r => `<option value="${r.code}">${r.code} (${r.label})</option>`).join('')}
+          </select>
+          <select class="form-select filter-input" id="filterStatus">
+            <option value="">${t('myAgent.filter.status')}</option>
+            <option value="1">${t('myAgent.status.normal')}</option>
+            <option value="0">${t('myAgent.status.frozen')}</option>
+          </select>
+
+          <div class="filter-actions">
+            <button class="btn-reset" data-act="reset">${t('common.reset')}</button>
+            <button class="btn-query" data-act="search">${t('common.search')}</button>
+          </div>
+        </div>
+
+        <div id="tableArea"></div>
+        ${pagination(AGENTS.length)}
+      </div>
+
+      <!-- 详情弹窗 -->
+      <div class="modal" id="viewModal">
+        <div class="modal-mask" data-act="close-view"></div>
+        <div class="modal-body view-modal">
+          <div class="modal-head">
+            <h3>${t('myAgent.modal.view')}</h3>
+            <button class="modal-close" data-act="close-view">✕</button>
+          </div>
+          <div class="modal-content" id="viewBody"></div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-view">${t('common.cancel')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 调整层级弹窗 -->
+      <div class="modal" id="tierModal">
+        <div class="modal-mask" data-act="close-tier"></div>
+        <div class="modal-body small-modal">
+          <div class="modal-head">
+            <h3>${t('myAgent.modal.changeTier')}</h3>
+            <button class="modal-close" data-act="close-tier">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="form-line">
+              <label>${t('myAgent.tierField.target')}</label>
+              <input type="text" id="tTarget" readonly />
+            </div>
+            <div class="form-grid-2">
+              <div class="form-line">
+                <label>${t('myAgent.tierField.current')}</label>
+                <input type="text" id="tCurrent" readonly />
+              </div>
+              <div class="form-line">
+                <label>${t('myAgent.tierField.newTier')} <span class="required">*</span></label>
+                <!-- 选项在 openTierModal 时根据该代理类型动态填充 -->
+                <select id="tNew"></select>
+              </div>
+            </div>
+            <div class="form-line">
+              <label>${t('myAgent.tierField.reason')} <span class="required">*</span></label>
+              <textarea id="tReason" placeholder="${t('myAgent.tierField.reasonPlaceholder')}" maxlength="200" rows="3"></textarea>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-tier">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnSaveTier">${t('common.save')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 移交弹窗 -->
+      <div class="modal" id="transferModal">
+        <div class="modal-mask" data-act="close-transfer"></div>
+        <div class="modal-body small-modal">
+          <div class="modal-head">
+            <h3>${t('myAgent.modal.transfer')}</h3>
+            <button class="modal-close" data-act="close-transfer">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="form-line">
+              <label>${t('myAgent.transferField.target')}</label>
+              <input type="text" id="trTarget" readonly />
+            </div>
+            <div class="form-grid-2">
+              <div class="form-line">
+                <label>${t('myAgent.transferField.currentAdmin')}</label>
+                <input type="text" id="trCurrent" readonly />
+              </div>
+              <div class="form-line">
+                <label>${t('myAgent.transferField.newAdmin')} <span class="required">*</span></label>
+                <select id="trNew">
+                  <option value="">${t('myAgent.transferField.pickAdmin')}</option>
+                  ${ADMINS.map(a => `<option value="${a.id}">${a.name}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="form-line">
+              <label>${t('myAgent.transferField.reason')} <span class="required">*</span></label>
+              <textarea id="trReason" placeholder="${t('myAgent.transferField.reasonPlaceholder')}" maxlength="200" rows="3"></textarea>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-transfer">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnSaveTransfer">${t('common.save')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    function refresh() {
+      document.getElementById('kpiArea').innerHTML = renderKpiCards();
+      document.getElementById('tableArea').innerHTML = renderTable();
+      bindRowActions();
+    }
+
+    /* ============== 详情弹窗内容 ============== */
+    function renderViewBody(a) {
+      const admin = ADMINS.find(x => x.id === a.admin);
+      const adminName = admin ? (getLang() === 'en' ? admin.nameEn : admin.name) : a.admin;
+      return `
+        <div class="view-grid">
+          <div class="view-card">
+            <div class="view-card-title">${t('myAgent.modal.viewBasic')}</div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.email')}</span><span class="view-v"><b>${a.email}</b></span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.type')}</span><span class="view-v">${typeTag(a.type)}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.tier')}</span><span class="view-v">${tierTag(a.tier)}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.joinDate')}</span><span class="view-v">${a.joinDate}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.status')}</span><span class="view-v"><span class="st-tag ${a.status ? 'st-active' : 'st-disabled'}">${a.status ? t('myAgent.status.normal') : t('myAgent.status.frozen')}</span></span></div>
+          </div>
+
+          <div class="view-card">
+            <div class="view-card-title">${t('myAgent.modal.viewPerf')}</div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.invitedCount')}</span><span class="view-v num"><b>${a.invited.toLocaleString()}</b></span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.commissionTotal')}</span><span class="view-v num strong">${fmtMoney(a.commission, a.type)}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.shareTotal')}</span><span class="view-v num ${hasShare(a) ? 'strong' : ''}">${
+              hasShare(a) ? fmtMoney(a.share, a.type) : '<span class="muted">-</span>'
+            }</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.withdrawable')}</span><span class="view-v num strong">${fmtMoney(a.withdrawable, a.type)}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.commissionMonth')}</span><span class="view-v num strong">${fmtMoney(a.commMonth, a.type)}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.newUsersMonth')}</span><span class="view-v num"><b>${a.newUsersMonth}</b></span></div>
+          </div>
+        </div>
+
+        <div class="view-card view-full">
+          <div class="view-card-title">${t('myAgent.modal.viewRel')}</div>
+          <div class="view-grid-2">
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.parent')}</span><span class="view-v">${a.parent === '-' ? '<span class="muted">' + t('myAgent.detail.none') + '</span>' : a.parent}</span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.admin')}</span><span class="view-v"><b>${adminName}</b></span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.project')}</span><span class="view-v"><span class="proj-tag">${projectName(a.project)}</span></span></div>
+            <div class="view-row"><span class="view-k">${t('myAgent.detail.region')}</span><span class="view-v"><span class="region-tag">${regionLabel(a.region)}</span></span></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function bindRowActions() {
+      document.querySelectorAll('#tableArea [data-act][data-id]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const id = parseInt(b.dataset.id, 10);
+          const act = b.dataset.act;
+          const a = AGENTS.find(x => x.id === id);
+          if (!a) return;
+          editingId = id;
+
+          if (act === 'view') {
+            document.getElementById('viewBody').innerHTML = renderViewBody(a);
+            openModal('viewModal');
+          }
+          else if (act === 'tier') {
+            document.getElementById('tTarget').value  = a.email;
+            document.getElementById('tCurrent').value = t('myAgent.tier.' + a.tier.toLowerCase());
+            // 按代理类型动态生成层级选项（ZB 只能 L1/L2/test）
+            const availTiers = tiersForType(a.type);
+            document.getElementById('tNew').innerHTML = availTiers.map(x =>
+              `<option value="${x}">${t('myAgent.tier.' + x.toLowerCase())}</option>`
+            ).join('');
+            document.getElementById('tNew').value = a.tier;
+            document.getElementById('tReason').value = '';
+            openModal('tierModal');
+          }
+          else if (act === 'transfer') {
+            const cur = ADMINS.find(x => x.id === a.admin);
+            document.getElementById('trTarget').value  = a.email;
+            document.getElementById('trCurrent').value = cur ? (getLang() === 'en' ? cur.nameEn : cur.name) : a.admin;
+            document.getElementById('trNew').value     = '';
+            document.getElementById('trReason').value  = '';
+            openModal('transferModal');
+          }
+          else if (act === 'freeze') {
+            const msgKey = a.status ? 'myAgent.toast.confirmFreeze' : 'myAgent.toast.confirmUnfreeze';
+            if (confirm(t(msgKey, { n: a.email }))) {
+              a.status = a.status ? 0 : 1;
+              saveAgents(AGENTS); refresh();
+              toast(a.status ? t('myAgent.toast.unfrozen', { n: a.email }) : t('myAgent.toast.frozen', { n: a.email }), 'success');
+            }
+          }
+        });
+      });
+    }
+
+    window.onPageReady = function () {
+      refresh();
+
+      // 类型 -> 层级 联动：根据所选类型重写层级下拉选项
+      function rebuildTierOptions() {
+        const sel  = document.getElementById('filterTier');
+        const type = document.getElementById('filterType').value;
+        const list = tiersForType(type);
+        const placeholder = `<option value="">${t('myAgent.filter.tier')}</option>`;
+        const opts = list.map(x =>
+          `<option value="${x}">${t('myAgent.tier.' + x.toLowerCase())}</option>`
+        ).join('');
+        sel.innerHTML = placeholder + opts;
+        sel.value = ''; // 类型变化时层级一律重置
+      }
+      document.getElementById('filterType').addEventListener('change', rebuildTierOptions);
+
+      // 筛选
+      document.querySelectorAll('.filter-row [data-act]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const act = b.dataset.act;
+          if (act === 'reset') {
+            ['kw','filterType','filterTier','filterProject','filterRegion','filterStatus'].forEach(id => {
+              document.getElementById(id).value = '';
+            });
+            rebuildTierOptions(); // 重置时层级选项也复位为「全部」
+            toast(t('toast.reset'), 'success');
+          } else if (act === 'search') toast(t('toast.searched'), 'success');
+        });
+      });
+
+      // 弹窗关闭
+      ['view','tier','transfer'].forEach((k) => {
+        document.querySelectorAll(`[data-act="close-${k}"]`).forEach((el) => {
+          el.addEventListener('click', () => closeModal(k + 'Modal'));
+        });
+      });
+
+      // 保存层级
+      document.getElementById('btnSaveTier').addEventListener('click', () => {
+        const newTier = document.getElementById('tNew').value;
+        const reason  = document.getElementById('tReason').value.trim();
+        const a = AGENTS.find(x => x.id === editingId);
+        if (!a) return;
+        if (!newTier) return toast(t('myAgent.val.newTierRequired'), 'danger');
+        if (newTier === a.tier) return toast(t('myAgent.val.newTierSame'), 'danger');
+        if (!reason) return toast(t('myAgent.val.reasonRequired'), 'danger');
+
+        a.tier = newTier;
+        saveAgents(AGENTS); refresh();
+        closeModal('tierModal');
+        toast(t('myAgent.toast.tierChanged', { n: a.email, tier: t('myAgent.tier.' + newTier.toLowerCase()) }), 'success');
+      });
+
+      // 保存移交
+      document.getElementById('btnSaveTransfer').addEventListener('click', () => {
+        const newAdmin = document.getElementById('trNew').value;
+        const reason   = document.getElementById('trReason').value.trim();
+        const a = AGENTS.find(x => x.id === editingId);
+        if (!a) return;
+        if (!newAdmin) return toast(t('myAgent.val.newAdminRequired'), 'danger');
+        if (newAdmin === a.admin) return toast(t('myAgent.val.newAdminSame'), 'danger');
+        if (!reason) return toast(t('myAgent.val.reasonRequired'), 'danger');
+
+        a.admin = newAdmin;
+        saveAgents(AGENTS);
+        // 移交后从我的列表里移除（因为是移交给别的管理员）
+        AGENTS = AGENTS.filter(x => x.id !== editingId);
+        saveAgents(AGENTS); refresh();
+        closeModal('transferModal');
+        const adminInfo = ADMINS.find(x => x.id === newAdmin);
+        const adminName = adminInfo ? (getLang() === 'en' ? adminInfo.nameEn : adminInfo.name) : newAdmin;
+        toast(t('myAgent.toast.transferred', { n: a.email, admin: adminName }), 'success');
+      });
+
+      // 分页
+      document.querySelectorAll('.page-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          if (b.classList.contains('active')) return;
+          toast(t('toast.pagePlaceholder'), 'success');
+        });
+      });
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* ============== KPI 卡片 ============== */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .kpi-card {
+      background: #fff; border-radius: 10px;
+      padding: 16px 18px;
+      display: flex; gap: 14px; align-items: center;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.2s;
+    }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .kpi-ico {
+      width: 44px; height: 44px; border-radius: 10px;
+      background: linear-gradient(135deg, rgba(0,200,150,0.12) 0%, rgba(0,200,150,0.04) 100%);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--color-primary); flex-shrink: 0;
+    }
+    .kpi-card.highlight .kpi-ico {
+      background: linear-gradient(135deg, rgba(245,166,35,0.12) 0%, rgba(245,166,35,0.04) 100%);
+      color: var(--color-warning);
+    }
+    .kpi-card.money .kpi-ico {
+      background: linear-gradient(135deg, rgba(58,161,255,0.12) 0%, rgba(58,161,255,0.04) 100%);
+      color: var(--color-info);
+    }
+    .kpi-main { flex: 1; min-width: 0; }
+    .kpi-label {
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+      margin-bottom: 4px;
+    }
+    .kpi-num {
+      font-size: 22px; font-weight: var(--fw-bold);
+      color: var(--color-text);
+      line-height: 1.2; letter-spacing: -0.5px;
+    }
+    .kpi-u {
+      font-size: var(--fs-meta);
+      color: var(--color-text-muted);
+      font-weight: var(--fw-medium);
+      margin-left: 3px;
+    }
+
+    /* ============== 表格相关 tag ============== */
+    .type-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+    }
+    .tt-kol { background: #ffe4e6; color: #be123c; }  /* KOL 粉红 */
+    .tt-ib  { background: #ede9fe; color: #6d28d9; }  /* IB 紫色 */
+    .tt-zb  { background: #dcfce7; color: #15803d; }  /* ZB 绿色 */
+
+    .tier-tag {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 10px;
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-bold);
+      color: #fff;
+    }
+    .tier-l1   { background: #5bc0de; }
+    .tier-l2   { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+    .tier-l3   { background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%); }
+    .tier-l4   { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%); }
+    .tier-l5   { background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%); }
+    .tier-test { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+    /* KOL 专属层级配色 */
+    .tier-kol-1 { background: linear-gradient(135deg, #f87171 0%, #dc2626 100%); } /* 高级推广员 */
+    .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); } /* 用户代理 */
+    .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); } /* 商务代理 */
+
+    .proj-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: var(--fs-body-sm);
+      background: #f0f9ff;
+      color: #0369a1;
+      font-weight: var(--fw-medium);
+    }
+    .region-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: var(--fs-body-sm);
+      background: #fef3c7;
+      color: #b45309;
+      font-family: ui-monospace, monospace;
+    }
+
+    .small { font-size: var(--fs-body-sm); }
+    .num { font-family: ui-monospace, monospace; }
+
+    /* 表头帮助图标 */
+    .th-help {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; margin-right: 3px; border-radius: 50%;
+      background: #94a3b8; color: #fff;
+      font-size: 10px; font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+      cursor: help; vertical-align: middle;
+    }
+    .th-help:hover { background: var(--color-primary); }
+
+    /* ============== 弹窗（同 system-roles） ============== */
+    .modal { position: fixed; inset: 0; z-index: 999; display: none; }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      animation: modalIn 0.2s; overflow: hidden;
+      max-height: 90vh; display: flex; flex-direction: column;
+    }
+    .view-modal { width: 720px; max-width: 92vw; }
+    .small-modal { width: 520px; max-width: 92vw; }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px; border-bottom: 1px solid #f0f3f7; flex-shrink: 0;
+    }
+    .modal-head h3 { font-size: var(--fs-h2); font-weight: var(--fw-bold); color: var(--color-text); }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted); font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 18px 20px; overflow-y: auto; flex: 1; }
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc; flex-shrink: 0;
+    }
+    .modal-foot .btn-outline, .modal-foot .btn-primary {
+      padding: 7px 18px; font-size: var(--fs-body);
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      font-family: inherit; font-weight: var(--fw-medium);
+      border: 1px solid transparent;
+    }
+    .modal-foot .btn-outline { color: var(--color-text); background: #fff; border-color: var(--color-border); }
+    .modal-foot .btn-outline:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .modal-foot .btn-primary { color: #fff; background: var(--color-primary); }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    /* 表单 */
+    .form-line { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .form-line label {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .required { color: var(--color-danger); margin-left: 2px; }
+    .form-line input, .form-line select, .form-line textarea {
+      padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      transition: border-color 0.15s;
+      font-family: inherit;
+      background: #fff;
+      resize: vertical;
+    }
+    .form-line input:disabled, .form-line input[readonly] {
+      background: #fafbfc; color: var(--color-text-secondary); cursor: not-allowed;
+    }
+    .form-line input:focus, .form-line select:focus, .form-line textarea:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    .form-grid-2 {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px;
+    }
+
+    /* 详情视图 */
+    .view-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+      margin-bottom: 14px;
+    }
+    .view-card {
+      padding: 14px 16px;
+      background: #fafbfc;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+    }
+    .view-card.view-full { width: 100%; }
+    .view-card-title {
+      font-size: var(--fs-body);
+      font-weight: var(--fw-bold);
+      color: var(--color-text);
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .view-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0;
+      font-size: var(--fs-body);
+    }
+    .view-k {
+      color: var(--color-text-secondary);
+      font-size: var(--fs-body-sm);
+    }
+    .view-v.num.strong { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .view-grid-2 {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4px 16px;
+    }
+  </style>
+</body>
+</html>

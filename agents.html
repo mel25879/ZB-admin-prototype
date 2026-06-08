@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>代理列表</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.agents.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=10"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============================================================
+     * 代理列表（全局）
+     * - 平台所有代理；不限管理员负责范围
+     * - 双行筛选 + 展开/收起；表格 14 列；操作仅「查看详情」
+     * ============================================================ */
+
+    /* ============== Toast（轻量复用） ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== 字典 ============== */
+    /* —— 代理类型 / 层级（仅保留 ZB 业务类型） —— */
+    // 注：原本支持 KOL / IB / ZB 三种类型，现按需求精简至仅 ZB
+    //     若需恢复 KOL / IB，把对应 key 加回 TIERS_BY_TYPE 并把 TYPES 数组补齐即可
+    const TYPES = ['ZB'];
+    const TIERS_BY_TYPE = {
+      ZB:  ['L1', 'L2', 'L3'],
+    };
+    const TIERS_ALL = (() => {
+      const s = new Set();
+      Object.values(TIERS_BY_TYPE).forEach(arr => arr.forEach(x => s.add(x)));
+      return [...s];
+    })();
+    function tiersForType(type) { return type ? (TIERS_BY_TYPE[type] || []) : TIERS_ALL; }
+
+    /* —— 项目 / 来源 / 渠道 / 国家 / 部门 / 个人 —— */
+    const PROJECTS = [
+      { key: 'dana',      name: 'Dana' },
+      { key: 'tradewill', name: 'Tradewill' },
+      { key: 'zibt',      name: 'ZIBT' },
+    ];
+    const SOURCES  = ['natural', 'invite', 'promo', 'internal'];
+    const CHANNELS = ['web', 'app', 'h5', 'pc'];
+    const COUNTRIES = ['CN','HK','TW','US','IN','VN','TH','MY','ID','BR','PH','SG','JP','NG'];
+    // 国家区号（用于筛选下拉，按用户需求只展示区号）
+    const DIAL_CODES = {
+      CN: '+86', HK: '+852', TW: '+886', US: '+1',   IN: '+91',
+      VN: '+84', TH: '+66',  MY: '+60',  ID: '+62',  BR: '+55',
+      PH: '+63', SG: '+65',  JP: '+81',  NG: '+234',
+    };
+
+    /* 部门 → 该部门下的成员（mock，做联动用） */
+    const DEPTS = ['sales', 'ops', 'market', 'cs', 'risk'];
+    const PERSONS_BY_DEPT = {
+      sales:  [ { id: 'zhangwei',  name: '张伟' },  { id: 'liuyang',  name: '刘洋' } ],
+      ops:    [ { id: 'lina',      name: '李娜' },  { id: 'wangfang', name: '王芳' } ],
+      market: [ { id: 'chenjie',   name: '陈杰' } ],
+      cs:     [ { id: 'zhaolei',   name: '赵磊' },  { id: 'sunmei',   name: '孙梅' } ],
+      risk:   [ { id: 'huangbo',   name: '黄博' } ],
+    };
+    const ALL_PERSONS = (() => {
+      const out = [];
+      DEPTS.forEach(d => PERSONS_BY_DEPT[d].forEach(p => out.push({ ...p, dept: d })));
+      return out;
+    })();
+    function personsForDept(dept) {
+      return dept ? PERSONS_BY_DEPT[dept] || [] : ALL_PERSONS;
+    }
+
+    /* ============== 格式化辅助 ============== */
+    function fmtNum(v)  { return Number(v).toLocaleString('en-US'); }
+    /* ZB 代理：交易总额以 USDT 计 */
+    function fmtUSDT(v) {
+      return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+    }
+
+    /* —— 标签渲染 —— */
+    function typeTag(type) {
+      const map = { KOL: 'tt-kol', IB: 'tt-ib', ZB: 'tt-zb' };
+      return `<span class="type-tag ${map[type]||''}">${type}</span>`;
+    }
+    function tierTag(tier) {
+      const map = {
+        L1: 'tier-l1', L2: 'tier-l2', L3: 'tier-l3', L4: 'tier-l4', L5: 'tier-l5',
+        test: 'tier-test',
+        senior_promoter: 'tier-kol-1', user_agent: 'tier-kol-2', business_agent: 'tier-kol-3',
+      };
+      return `<span class="tier-tag ${map[tier]||''}">${t('myAgent.tier.' + tier.toLowerCase())}</span>`;
+    }
+    function projectName(key) { const p = PROJECTS.find(x => x.key === key); return p ? p.name : key; }
+    function sourceTag(s)  { return `<span class="src-tag src-${s}">${t('agents.source.' + s)}</span>`; }
+    function channelTag(c) { return `<span class="ch-tag ch-${c}">${t('agents.channel.' + c)}</span>`; }
+    // 表格列只显示区号（如 +62、+91），保留 cc 在 title 里以便 hover 查看完整国家
+    function countryTag(cc){
+      const dial = DIAL_CODES[cc] || cc;
+      return `<span class="ctr-tag" title="${cc} · ${t('agents.country.' + cc)}">${dial}</span>`;
+    }
+    /* ============== Mock 数据（localStorage 持久化） ============== */
+    // localStorage key 升版 v9 → v10：
+    //   1) 精简到 10 条（L1 × 3 + L2 × 4 + L3 × 3）
+    //   2) 邮箱与 invited-users.html 的 inviter 字段一一对应，跨页一致
+    //   3) 新增 L3 代理 → 操作列可"设置为一级代理"
+    const AGENTS_KEY = 'zb_admin_agents_v10';
+    /* 仅 ZB 业务类型（IB / KOL 已移除）
+     * monthCommission / pendingCommission：当月获取 / 待结算 佣金（所有代理都有）
+     * monthShare      / pendingShare：     当月获得 / 待结算 分成（L1 + L2 有，L3 没有）
+     */
+    const DEFAULT_AGENTS = [
+      /* === L1 一级代理（3 条）：无 inviter；从 L2 / L3 链路获得分成 === */
+      { id:'A100001', email:'alice@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'app', country:'IN', regTime:'2026-03-15 14:32', userCount:1620, tradeUserCount:512, lots:18560.25, monthCommission:42.80, pendingCommission:12.50, monthShare:128.40, pendingShare:32.10, dept:'sales',  person:'zhangwei' },
+      { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', userCount:320,  tradeUserCount:88,  lots:2105.50,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei' },
+      { id:'A100003', email:'frank@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'h5',  country:'IN', regTime:'2026-05-08 08:50', userCount:180,  tradeUserCount:42,  lots:980.10,   monthCommission:3.20,  pendingCommission:0.90,  monthShare:12.50,  pendingShare:3.40,  dept:'sales',  person:'liuyang' },
+
+      /* === L2 二级代理（4 条）：inviter 是 L1；从 L3 链路获得分成 === */
+      { id:'A100004', email:'amy@163.com',       inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'pc',  country:'CN', regTime:'2026-01-28 10:24', userCount:2400, tradeUserCount:820, lots:32850.00, monthCommission:76.40, pendingCommission:22.30, monthShare:18.60,  pendingShare:5.20,  dept:'ops',    person:'lina' },
+      { id:'A100005', email:'mary@hotmail.com',  inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'app', country:'VN', regTime:'2026-02-14 12:00', userCount:780,  tradeUserCount:230, lots:8420.30,  monthCommission:18.50, pendingCommission:5.20,  monthShare:9.40,   pendingShare:2.10,  dept:'sales',  person:'zhangwei' },
+      { id:'A100006', email:'sara@gmail.com',    inviter:'bob@outlook.com', type:'ZB', tier:'L2', project:'zibt', source:'promo',    channel:'web', country:'IN', regTime:'2026-04-18 16:22', userCount:920,  tradeUserCount:280, lots:9650.50,  monthCommission:24.20, pendingCommission:7.10,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
+      { id:'A100007', email:'cathy@qq.com',      inviter:'frank@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'web', country:'BR', regTime:'2026-03-22 13:55', userCount:1080, tradeUserCount:325, lots:14200.75, monthCommission:35.60, pendingCommission:10.40, monthShare:0,      pendingShare:0,     dept:'cs',     person:'sunmei' },
+
+      /* === L3 三级代理（3 条）：inviter 是 L2；最底层，无 share === */
+      { id:'A100008', email:'lucas@gmail.com',   inviter:'mary@hotmail.com',inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'app', country:'NG', regTime:'2026-05-21 20:14', userCount:62,   tradeUserCount:8,   lots:120.00,   monthCommission:0.40,  pendingCommission:0.12,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
+      { id:'A100009', email:'eva@163.com',       inviter:'sara@gmail.com',  inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'h5',  country:'PH', regTime:'2026-02-08 17:42', userCount:580,  tradeUserCount:175, lots:5240.50,  monthCommission:13.20, pendingCommission:3.80,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
+      { id:'A100010', email:'derek@gmail.com',   inviter:'cathy@qq.com',    inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'promo',    channel:'app', country:'SG', regTime:'2026-05-03 08:18', userCount:260,  tradeUserCount:72,  lots:1820.00,  monthCommission:6.20,  pendingCommission:1.80,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
+    ];
+
+    function loadAgents() {
+      try {
+        const d = JSON.parse(localStorage.getItem(AGENTS_KEY));
+        if (Array.isArray(d) && d.length) return d;
+      } catch (e) {}
+      return DEFAULT_AGENTS.map(x => ({ ...x }));
+    }
+    function saveAgents(arr) {
+      try { localStorage.setItem(AGENTS_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    let AGENTS = loadAgents();
+    let editingId = null;
+
+    /* L1 + L2 都可获得分成（L1 从 L2/L3 获取；L2 从 L3 获取）；L3 最底层无 share */
+    function hasShare(a) { return a.type === 'ZB' && (a.tier === 'L1' || a.tier === 'L2'); }
+
+    /* ============== 操作列：按代理类型 + 层级渲染 ============== */
+    /*  L1（或从 L1 进入测试态）→ 「开启/关闭测试」
+     *  L2 / L3              → 「设置为一级代理」
+     *  IB / KOL             → 无操作
+     */
+    function renderOps(a) {
+      if (a.type !== 'ZB') return '<span class="muted">-</span>';
+      const isTest = a.tier === 'test';
+      // L1 / test-from-L1 → 测试开关
+      if (a.tier === 'L1' || (isTest && a._prevTier === 'L1')) {
+        return `<button class="t-act" data-act="toggle-test">${
+          isTest ? t('agents.btn.disableTest') : t('agents.btn.enableTest')
+        }</button>`;
+      }
+      // L2 / L3 → 不再提供行内"设置为一级代理"操作，统一走顶部"+ 添加一级代理"入口
+      return '<span class="muted">-</span>';
+    }
+
+    /* ============== 列定义表（一份配置驱动多个 tab） ============== */
+    /* 每列：{ width, header(i18n key), help?(i18n key), align?, render(a) } */
+    const C = {
+      tier:           { width: 100, header: 'agents.col.tier',           align: 'center', render: a => `<td class="text-center">${tierTag(a.tier)}</td>` },
+      inviter:        { width: 200, header: 'agents.col.inviter',        render: a => `<td class="nowrap" title="${a.inviter}">${a.inviter === '-' ? '<span class="muted">-</span>' : a.inviter}</td>` },
+      id:             { width: 100, header: 'agents.col.id',             render: a => `<td class="num">${a.id}</td>` },
+      email:          { width: 220, header: 'agents.col.email',          render: a => `<td class="nowrap" title="${a.email}">${a.email}</td>` },
+      project:        { width: 90,  header: 'agents.col.project',        render: a => `<td><span class="proj-tag">${projectName(a.project)}</span></td>` },
+      source:         { width: 100, header: 'agents.col.source',         render: a => `<td>${sourceTag(a.source)}</td>` },
+      channel:        { width: 80,  header: 'agents.col.channel',        render: a => `<td>${channelTag(a.channel)}</td>` },
+      // 地区列：现只显示 +XX 区号，宽度收窄
+      country:        { width: 90,  header: 'agents.col.country',        render: a => `<td>${countryTag(a.country)}</td>` },
+      regTime:        { width: 160, header: 'agents.col.regTime',        render: a => `<td class="num small nowrap">${a.regTime}</td>` },
+      // 邀请用户数：容纳 5 字标题
+      userCount:      { width: 110, header: 'agents.col.userCount',      align: 'right',  render: a => `<td class="num text-right">${fmtNum(a.userCount)}</td>` },
+      // 有效邀请数量
+      tradeUserCount: { width: 140, header: 'agents.col.tradeUserCount', align: 'right', render: a => `<td class="num text-right">${fmtNum(a.tradeUserCount)}</td>` },
+      lots:              { width: 160, header: 'agents.col.lots',              align: 'right',  render: a => `<td class="num text-right">${fmtUSDT(a.lots)}</td>` },
+      // 当月 → 绿色高亮（已结算到本月数据）；待结算 → 橙色（暂未结算，需关注）
+      monthCommission:   { width: 140, header: 'agents.col.monthCommission',   align: 'right',  render: a => `<td class="num text-right strong">${fmtUSDT(a.monthCommission)}</td>` },
+      pendingCommission: { width: 130, header: 'agents.col.pendingCommission', align: 'right',  render: a => `<td class="num text-right pending">${fmtUSDT(a.pendingCommission)}</td>` },
+      monthShare:        { width: 140, header: 'agents.col.monthShare',        align: 'right',  render: a => `<td class="num text-right ${hasShare(a) ? 'strong' : ''}">${hasShare(a) ? fmtUSDT(a.monthShare) : '<span class="muted">-</span>'}</td>` },
+      pendingShare:      { width: 130, header: 'agents.col.pendingShare',      align: 'right',  render: a => `<td class="num text-right ${hasShare(a) ? 'pending' : ''}">${hasShare(a) ? fmtUSDT(a.pendingShare) : '<span class="muted">-</span>'}</td>` },
+      // 操作列：只剩 1 个按钮，收窄
+      actions:        { width: 130, header: 'agents.col.actions',        align: 'center', render: a => `<td class="op-cell">${renderOps(a)}</td>` },
+    };
+    /* 各 tab 的列顺序：ZB 含 share / pendingShare；IB / KOL 不含
+     * 列排布：当月X 紧贴对应的 待结算X，方便对比 */
+    const SCHEMA_BY_TYPE = {
+      ZB:  ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','monthShare','pendingShare','actions'],
+      IB:  ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
+      KOL: ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
+    };
+
+    /* ============== 渲染：表格（按当前 tab 类型） ============== */
+    function renderHeader(col) {
+      const cls  = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
+      const help = col.help ? `<span class="th-help" title="${t(col.help)}">?</span>` : '';
+      return `<th class="${cls}">${help}${t(col.header)}</th>`;
+    }
+    function renderTable(type) {
+      const data = AGENTS.filter(a => a.type === type);
+      if (!data.length) {
+        return `<div class="empty-state"><div class="empty-icon">📋</div>${t('agents.empty')}</div>`;
+      }
+      const cols = SCHEMA_BY_TYPE[type].map(k => ({ ...C[k], key: k }));
+      const rows = data.map(a => `<tr data-id="${a.id}">${cols.map(c => c.render(a)).join('')}</tr>`).join('');
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <colgroup>${cols.map(c => `<col style="width:${c.width}px">`).join('')}</colgroup>
+            <thead><tr>${cols.map(renderHeader).join('')}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：分页（mock） ============== */
+    function pagination(total) {
+      const totalPages = Math.max(1, Math.ceil(total / 20));
+      return `
+        <div class="pagination">
+          <span class="page-info">共 <b>${total}</b> 条 / <b>${totalPages}</b> 页</span>
+          <div class="page-btns">
+            <button class="page-btn">«</button>
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">›</button>
+            <button class="page-btn">»</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：单个 tab 的筛选块（已精简至单行，按钮与条件并列） ============== */
+    function renderFilterBlock(type) {
+      return `
+        <div class="filter-block" id="filterBlock-${type}">
+          <div class="filter-row filter-row-1">
+            <input  class="form-input filter-input"  id="fId-${type}"      placeholder="${t('agents.filter.id')}" />
+            <input  class="form-input filter-input"  id="fEmail-${type}"   placeholder="${t('agents.filter.email')}" />
+            <select class="form-select filter-input" id="fRegion-${type}">
+              <option value="">${t('agents.filter.regRegion')}</option>
+              ${COUNTRIES.map(c => `<option value="${c}">${DIAL_CODES[c]}</option>`).join('')}
+            </select>
+            <select class="form-select filter-input" id="fTier-${type}">
+              <option value="">${t('agents.filter.tier')}</option>
+              ${tiersForType(type).map(tier => `<option value="${tier}">${t('agents.filter.tier.' + tier.toLowerCase())}</option>`).join('')}
+            </select>
+            <div class="date-range">
+              <span class="date-range-label">${t('invitedUser.filter.regTime')}</span>
+              <div class="date-input-wrap">
+                <span class="date-ico">📅</span>
+                <input class="dt-input" type="date" id="fDateFrom-${type}" title="${t('invitedUser.filter.regTime')}" />
+              </div>
+              <span class="dt-sep">~</span>
+              <div class="date-input-wrap">
+                <input class="dt-input" type="date" id="fDateTo-${type}" title="${t('invitedUser.filter.regTime')}" />
+              </div>
+            </div>
+            <!-- 重置 / 查询：与筛选条件同行（靠右对齐） -->
+            <div class="filter-actions">
+              <button class="btn-reset" data-act="reset"  data-type="${type}">${t('common.reset')}</button>
+              <button class="btn-query" data-act="search" data-type="${type}">${t('common.search')}</button>
+            </div>
+          </div>
+
+          <!-- 左下角：添加一级代理（仅 ZB tab 显示） -->
+          ${type === 'ZB' ? `
+            <div class="filter-extra">
+              <button class="btn-add-l1" data-act="open-add-l1">
+                ${t('agents.btn.addL1')}
+              </button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：单个 tab 的内容容器 ============== */
+    function renderPane(type, active) {
+      return `
+        <div class="biz-pane" id="pane-${type}" data-type="${type}"${active ? '' : ' style="display:none"'}>
+          ${renderFilterBlock(type)}
+          <div id="tableArea-${type}"></div>
+          <div id="paginationArea-${type}"></div>
+        </div>
+      `;
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.agents.title')}</h1>
+      </div>
+
+      <div class="card sec-card">
+        <!-- ===== 业务类型 Tab：仅当类型 > 1 时显示（当前只剩 ZB，隐藏 Tab 栏） ===== -->
+        ${TYPES.length > 1 ? `
+          <div class="biz-tabs" role="tablist">
+            ${TYPES.map((tp, i) => `
+              <button class="biz-tab ${i===0 ? 'active' : ''}" data-type="${tp}">
+                ${tp} <span class="biz-tab-count" id="cnt-${tp}"></span>
+              </button>
+            `).join('')}
+          </div>
+        ` : ''}
+
+        <!-- ===== 每个业务类型独立一个 pane（含独立筛选 + 表格 + 分页） ===== -->
+        ${TYPES.map((tp, i) => renderPane(tp, i === 0)).join('')}
+      </div>
+
+      <!-- ===== 开启/关闭测试 确认弹窗 ===== -->
+      <div class="modal" id="testModal">
+        <div class="modal-mask" data-act="close-test"></div>
+        <div class="modal-body confirm-modal">
+          <div class="modal-head">
+            <h3 id="testModalTitle">${t('agents.btn.enableTest')}</h3>
+            <button class="modal-close" data-act="close-test">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="confirm-body">
+              <svg class="confirm-ico" viewBox="0 0 24 24" width="22" height="22" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"/>
+                <line x1="12" y1="8" x2="12" y2="13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="12" cy="16" r="1.2" fill="currentColor"/>
+              </svg>
+              <div class="confirm-text">
+                <div class="confirm-title" id="testConfirmMsg"></div>
+                <!-- 自定义测试参数（仅"开启测试"时显示，"关闭测试"时隐藏） -->
+                <div class="test-params" id="testParams">
+                  <div class="test-params-grid">
+                    <div class="form-line">
+                      <label>${t('agents.test.params.rateLabel')} <span class="required">*</span></label>
+                      <input type="number" id="testRateInput" min="0" max="100" step="1" required />
+                    </div>
+                    <div class="form-line">
+                      <label>${t('agents.test.params.expireLabel')} <span class="required">*</span></label>
+                      <input type="date" id="testExpireInput" required />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-test">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnTestConfirm">${t('common.confirm')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 设置为一级代理 确认弹窗（针对 L2 / L3 代理升级） ===== -->
+      <!-- ===== 添加一级代理 弹窗（合并：新增 + 升级两种场景） ===== -->
+      <!-- 业务规则：
+             - 输入邮箱 / 用户ID 查询
+             - 用户尚不是代理         → 添加为 L1
+             - 用户已是 L2 / L3 代理  → 升级为 L1，同时解除原邀请关系（返显原邀请人邮箱）
+             - 用户已是 L1 / test     → 提示已是一级代理，不提供确认按钮
+             - 始终可勾选「同时开启测试模式」（非必须） -->
+      <div class="modal" id="addL1Modal">
+        <div class="modal-mask" data-act="close-add-l1"></div>
+        <div class="modal-body small-modal">
+          <div class="modal-head">
+            <h3>${t('agents.addL1.modal')}</h3>
+            <button class="modal-close" data-act="close-add-l1">✕</button>
+          </div>
+          <div class="modal-content">
+            <!-- 步骤 1：搜索栏 -->
+            <div class="form-line">
+              <label>${t('agents.addL1.field.search')} <span class="required">*</span></label>
+              <div class="search-row">
+                <input type="text" id="l1Search" placeholder="${t('agents.addL1.field.placeholder')}" autocomplete="off" />
+                <button class="btn-primary btn-inline" id="btnL1Search">${t('agents.addL1.btn.search')}</button>
+              </div>
+            </div>
+
+            <!-- 步骤 2：查询结果（默认隐藏，查到了才显示） -->
+            <div class="l1-result" id="l1Result" style="display:none">
+              <div class="l1-result-title" id="l1ResultTitle"></div>
+              <div class="l1-result-card" id="l1ResultCard"></div>
+
+              <!-- 升级场景：橙色警告条 —— "将解除邀请关系" -->
+              <div class="l1-sever-warn" id="l1SeverWarn" style="display:none"></div>
+
+              <!-- 同时开启测试模式（可选） —— 已是 L1 / test 时整行隐藏 -->
+              <label class="checkbox-row" id="l1EnableTestRow" style="display:none">
+                <input type="checkbox" id="l1EnableTest" />
+                <span class="checkbox-label">${t('agents.promoteL1.enableTestLabel')}</span>
+              </label>
+              <!-- 勾选后显示测试参数 -->
+              <div class="test-params" id="l1TestParams" style="display:none">
+                <div class="test-params-grid">
+                  <div class="form-line">
+                    <label>${t('agents.test.params.rateLabel')} <span class="required">*</span></label>
+                    <input type="number" id="l1RateInput" min="0" max="100" step="1" required />
+                  </div>
+                  <div class="form-line">
+                    <label>${t('agents.test.params.expireLabel')} <span class="required">*</span></label>
+                    <input type="date" id="l1ExpireInput" required />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-add-l1">${t('common.cancel')}</button>
+            <!-- 确认按钮：默认隐藏，查询出可操作用户后才显示 -->
+            <button class="btn-primary" id="btnL1Confirm" style="display:none">${t('common.confirm')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    function openModal(id)  { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    /* ============== 添加一级代理：搜索 → 返显 → 确认 ============== */
+    /* 业务规则（合并自原"设置为一级代理"）：
+       - 输入邮箱 / 用户ID 查询
+       - 用户尚不是代理         → 添加为 L1
+       - 用户已是 L2 / L3 代理  → 升级为 L1，并解除原邀请关系（结果卡返显原邀请人邮箱 + 橙色警告）
+       - 用户已是 L1 / test     → 提示已是一级代理，不允许重复
+       - 任一场景都可勾选「同时开启测试模式」（非必须） */
+
+    // 简单的邮箱判断（用于 mock 识别 kw 是邮箱还是 ID）
+    const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
+    // 当前查询命中的目标 —— { mode: 'add'|'promote'|'none', user?, agent? }
+    let l1FoundUser = null;
+
+    /* 打开弹窗：清空状态 */
+    function openAddL1Modal() {
+      l1FoundUser = null;
+      document.getElementById('l1Search').value = '';
+      document.getElementById('l1Result').style.display = 'none';
+      document.getElementById('l1SeverWarn').style.display = 'none';
+      document.getElementById('l1EnableTestRow').style.display = 'none';
+      document.getElementById('l1TestParams').style.display = 'none';
+      document.getElementById('l1EnableTest').checked = false;
+      resetTestParams('l1RateInput', 'l1ExpireInput');
+      document.getElementById('btnL1Confirm').style.display = 'none';
+      openModal('addL1Modal');
+      setTimeout(() => document.getElementById('l1Search').focus(), 50);
+    }
+
+    /* 渲染：现有代理信息卡（升级 / 已是 L1 场景共用） */
+    function renderExistingAgentCard(a) {
+      const tierName = tierTag(a.tier);
+      const hasInviter = a.inviter && a.inviter !== '-';
+      return `
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.col.id')}</span><span class="l1-info-value mono">${a.id}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.email')}</span><span class="l1-info-value">${a.email}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.currentTier')}</span><span class="l1-info-value">${tierName}</span></div>
+        ${hasInviter ? `
+          <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.currentInviter')}</span><span class="l1-info-value l1-info-warn mono">${a.inviter}</span></div>
+        ` : ''}
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.regTime')}</span><span class="l1-info-value mono">${a.regTime}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.country')}</span><span class="l1-info-value">${DIAL_CODES[a.country]} (${a.country})</span></div>
+      `;
+    }
+
+    /* 渲染：新用户信息卡（add 场景） */
+    function renderNewUserCard(u) {
+      return `
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.id')}</span><span class="l1-info-value mono">${u.userId}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.email')}</span><span class="l1-info-value">${u.email}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.regTime')}</span><span class="l1-info-value mono">${u.regTime}</span></div>
+        <div class="l1-info-row"><span class="l1-info-label">${t('agents.addL1.user.country')}</span><span class="l1-info-value">${DIAL_CODES[u.country]} (${u.country})</span></div>
+      `;
+    }
+
+    /* 搜索：根据 keyword 命中三态之一 */
+    function doL1Search() {
+      const kw = document.getElementById('l1Search').value.trim();
+      if (!kw) return toast(t('agents.addL1.val.kwRequired'), 'danger');
+
+      const isEmail = EMAIL_RE.test(kw);
+      // 查找是否已是代理
+      const existing = AGENTS.find(a =>
+        (isEmail && a.email === kw) || (!isEmail && a.id === kw)
+      );
+
+      // 重置：每次新查询前清空所有展示态
+      document.getElementById('l1SeverWarn').style.display = 'none';
+      document.getElementById('l1EnableTestRow').style.display = 'none';
+      document.getElementById('l1TestParams').style.display = 'none';
+      document.getElementById('l1EnableTest').checked = false;
+      resetTestParams('l1RateInput', 'l1ExpireInput');
+
+      const resultEl   = document.getElementById('l1Result');
+      const titleEl    = document.getElementById('l1ResultTitle');
+      const cardEl     = document.getElementById('l1ResultCard');
+      const confirmBtn = document.getElementById('btnL1Confirm');
+
+      if (existing) {
+        // 命中已有代理
+        if (existing.tier === 'L1' || existing.tier === 'test') {
+          // 已是 L1 / test → 提示，不允许操作
+          l1FoundUser = { mode: 'none', agent: existing };
+          titleEl.textContent = t('agents.addL1.alreadyL1');
+          titleEl.classList.add('l1-result-title-warn');
+          cardEl.innerHTML = renderExistingAgentCard(existing);
+          confirmBtn.style.display = 'none';
+        } else {
+          // L2 / L3 → 升级模式
+          l1FoundUser = { mode: 'promote', agent: existing };
+          titleEl.textContent = t('agents.addL1.foundAgent');
+          titleEl.classList.remove('l1-result-title-warn');
+          cardEl.innerHTML = renderExistingAgentCard(existing);
+
+          // 解除邀请关系警告（有 inviter 才显示）
+          if (existing.inviter && existing.inviter !== '-') {
+            const warnEl = document.getElementById('l1SeverWarn');
+            warnEl.innerHTML = t('agents.addL1.severNotice', {
+              tier:    t('myAgent.tier.' + existing.tier.toLowerCase()),
+              inviter: existing.inviter,
+            });
+            warnEl.style.display = 'block';
+          }
+
+          document.getElementById('l1EnableTestRow').style.display = '';
+          confirmBtn.style.display = '';
+        }
+      } else {
+        // 未命中 → 新增模式（mock 一个用户）
+        const nextNum = Math.max(...AGENTS.filter(a => a.id.startsWith('A1000')).map(a => parseInt(a.id.slice(5), 10) || 0)) + 1;
+        l1FoundUser = {
+          mode: 'add',
+          user: {
+            userId:  isEmail ? `U${100000 + nextNum}` : kw,
+            email:   isEmail ? kw : `user${nextNum}@example.com`,
+            country: 'CN',
+            regTime: '2026-05-30 12:00:00',
+          },
+        };
+        titleEl.textContent = t('agents.addL1.foundUser');
+        titleEl.classList.remove('l1-result-title-warn');
+        cardEl.innerHTML = renderNewUserCard(l1FoundUser.user);
+        document.getElementById('l1EnableTestRow').style.display = '';
+        confirmBtn.style.display = '';
+      }
+      resultEl.style.display = 'block';
+    }
+
+    /* 确认：按 mode 分支 — 升级 / 新增 */
+    function confirmAddL1() {
+      if (!l1FoundUser || l1FoundUser.mode === 'none') return;
+      const enableTest = document.getElementById('l1EnableTest').checked;
+
+      let params = null;
+      if (enableTest) {
+        params = readTestParams('l1RateInput', 'l1ExpireInput');
+        if (!params) return;  // 校验失败保持弹窗打开
+      }
+
+      if (l1FoundUser.mode === 'promote') {
+        /* === 升级现有 L2 / L3 代理 → L1，并解除原邀请关系 === */
+        const a = l1FoundUser.agent;
+        a.inviter = '-';
+        delete a.inviterTier;
+        if (enableTest) {
+          a._prevTier  = 'L1';
+          a.tier       = 'test';
+          a.testRate   = params.rate;
+          a.testExpire = params.expire;
+        } else {
+          a.tier = 'L1';
+          delete a._prevTier;
+          delete a.testRate;
+          delete a.testExpire;
+        }
+        saveAgents(AGENTS); refresh();
+        closeModal('addL1Modal');
+        toast(t(enableTest ? 'agents.promoteL1.toast.doneWithTest' : 'agents.promoteL1.toast.done', {
+          n: a.email, rate: params?.rate, expire: params?.expire,
+        }), 'success');
+      } else {
+        /* === 新增 L1 代理 === */
+        const u = l1FoundUser.user;
+        const newAgent = {
+          id: u.userId.replace('U1', 'A1'),
+          email:    u.email,
+          inviter:  '-',
+          type:     'ZB',
+          tier:     enableTest ? 'test' : 'L1',
+          project:  'zibt',
+          source:   'internal',
+          channel:  'pc',
+          country:  u.country,
+          regTime:  u.regTime,
+          userCount: 0,
+          tradeUserCount: 0,
+          lots: 0,
+          monthCommission: 0, pendingCommission: 0,
+          monthShare: 0,      pendingShare: 0,
+          dept: '',
+          person: '',
+        };
+        if (enableTest) {
+          newAgent._prevTier  = 'L1';
+          newAgent.testRate   = params.rate;
+          newAgent.testExpire = params.expire;
+        }
+        AGENTS.unshift(newAgent);
+        saveAgents(AGENTS); refresh();
+        closeModal('addL1Modal');
+        toast(t(enableTest ? 'agents.addL1.toast.addedWithTest' : 'agents.addL1.toast.added', {
+          n: u.email, rate: params?.rate, expire: params?.expire,
+        }), 'success');
+      }
+    }
+
+    /* ============== 行内操作绑定 ============== */
+    let testEditingId      = null;  // 当前要切换测试状态的代理 ID
+
+    function bindRowActions() {
+      document.querySelectorAll('.biz-table tbody tr').forEach((tr) => {
+        const id = tr.dataset.id;
+        tr.querySelectorAll('[data-act]').forEach((b) => {
+          b.addEventListener('click', () => {
+            const a = AGENTS.find(x => x.id === id);
+            if (!a) return;
+            const act = b.dataset.act;
+
+            /* 开启 / 关闭测试模式：打开自定义确认弹窗（替代原生 confirm）*/
+            if (act === 'toggle-test') {
+              openTestConfirm(a);
+              return;
+            }
+
+          });
+        });
+      });
+    }
+
+    /* ============== 测试参数 helpers ============== */
+    // 读取并校验测试参数：返回 { rate, expire } 或 null（校验失败）
+    // 业务规则：返佣比例 + 测试到期时间 均为必填
+    function readTestParams(rateInputId, expireInputId) {
+      const rateInput   = document.getElementById(rateInputId);
+      const expireInput = document.getElementById(expireInputId);
+      const rateRaw     = rateInput.value.trim();
+      const expireRaw   = expireInput.value.trim();
+      // 必填：返佣比例
+      if (rateRaw === '') {
+        toast(t('agents.test.params.rateRequired'), 'danger');
+        rateInput.focus();
+        return null;
+      }
+      // 范围校验：0-100 整数
+      const rate = parseInt(rateRaw, 10);
+      if (isNaN(rate) || rate < 0 || rate > 100) {
+        toast(t('agents.test.params.rateInvalid'), 'danger');
+        rateInput.focus();
+        return null;
+      }
+      // 必填：测试到期时间
+      if (expireRaw === '') {
+        toast(t('agents.test.params.expireRequired'), 'danger');
+        expireInput.focus();
+        return null;
+      }
+      return { rate, expire: expireRaw };
+    }
+    // 重置测试参数输入框为空（用户每次打开弹窗必须重新输入）
+    function resetTestParams(rateInputId, expireInputId) {
+      document.getElementById(rateInputId).value   = '';
+      document.getElementById(expireInputId).value = '';
+    }
+
+    /* ============== 测试模式 二次确认（自定义弹窗） ============== */
+    function openTestConfirm(a) {
+      testEditingId = a.id;
+      const isTest = a.tier === 'test';
+      const prev   = a._prevTier || 'L1';
+      // 标题：开启 / 关闭测试
+      document.getElementById('testModalTitle').textContent = isTest
+        ? t('agents.btn.disableTest')
+        : t('agents.btn.enableTest');
+      // 主提示文案（i18n 模板已含 {n} 占位符）
+      const msg = isTest
+        ? t('agents.toast.confirmDisableTest', { n: a.email, tier: t('myAgent.tier.' + prev.toLowerCase()) })
+        : t('agents.toast.confirmEnableTest', { n: a.email });
+      document.getElementById('testConfirmMsg').textContent = msg;
+      // 开启测试时显示参数区；关闭测试时隐藏
+      const params = document.getElementById('testParams');
+      if (isTest) {
+        params.style.display = 'none';
+      } else {
+        params.style.display = '';
+        resetTestParams('testRateInput', 'testExpireInput');
+      }
+      openModal('testModal');
+    }
+
+    function confirmToggleTest() {
+      const a = AGENTS.find(x => x.id === testEditingId);
+      if (!a) return;
+      const isTest = a.tier === 'test';
+      if (isTest) {
+        const prev = a._prevTier || 'L1';
+        a.tier = prev;
+        delete a._prevTier;
+        delete a.testRate;
+        delete a.testExpire;
+        saveAgents(AGENTS); refresh();
+        closeModal('testModal');
+        toast(t('agents.toast.testDisabled', { n: a.email, tier: t('myAgent.tier.' + prev.toLowerCase()) }), 'success');
+      } else {
+        const params = readTestParams('testRateInput', 'testExpireInput');
+        if (!params) return;  // 校验失败保持弹窗打开
+        a._prevTier  = a.tier;
+        a.tier       = 'test';
+        a.testRate   = params.rate;
+        a.testExpire = params.expire;
+        saveAgents(AGENTS); refresh();
+        closeModal('testModal');
+        toast(t('agents.toast.testEnabledWithParams', {
+          n: a.email, rate: params.rate, expire: params.expire,
+        }), 'success');
+      }
+    }
+
+    /* 当前激活的业务类型 tab */
+    let currentType = 'ZB';
+
+    /* 每次数据变化（开启测试 / 改绑管理员）：刷新所有 3 个 tab 的表格 + 分页 + 条数 */
+    function refresh() {
+      TYPES.forEach(tp => {
+        const data = AGENTS.filter(a => a.type === tp);
+        document.getElementById('tableArea-' + tp).innerHTML      = renderTable(tp);
+        document.getElementById('paginationArea-' + tp).innerHTML = pagination(data.length);
+        const cntEl = document.getElementById('cnt-' + tp);
+        if (cntEl) cntEl.textContent = `(${data.length})`;
+      });
+      bindRowActions();
+      setupDragScroll();
+    }
+
+    /* ============== 表格鼠标拖拽横向滚动 ============== */
+    /* 文档级 mouseup 只绑一次；mousedown/move/click 给所有 .table-wrap 都挂上 */
+    const _drag = { wrap: null, down: false, moved: false, sx: 0, sl: 0 };
+    document.addEventListener('mouseup', () => {
+      if (_drag.down) {
+        _drag.down = false;
+        _drag.wrap && _drag.wrap.classList.remove('dragging');
+      }
+    });
+    function setupDragScroll() {
+      document.querySelectorAll('.table-wrap').forEach(wrap => {
+        wrap.addEventListener('mousedown', (e) => {
+          if (e.target.closest('button, a, input, select, textarea')) return;
+          _drag.wrap  = wrap;
+          _drag.down  = true;
+          _drag.moved = false;
+          _drag.sx    = e.pageX - wrap.offsetLeft;
+          _drag.sl    = wrap.scrollLeft;
+          wrap.classList.add('dragging');
+        });
+        wrap.addEventListener('mousemove', (e) => {
+          if (!_drag.down || _drag.wrap !== wrap) return;
+          e.preventDefault();
+          const x = e.pageX - wrap.offsetLeft;
+          const walk = x - _drag.sx;
+          if (Math.abs(walk) > 3) _drag.moved = true;
+          wrap.scrollLeft = _drag.sl - walk;
+        });
+        wrap.addEventListener('click', (e) => {
+          if (_drag.moved && _drag.wrap === wrap) {
+            e.stopPropagation(); e.preventDefault();
+            _drag.moved = false;
+          }
+        }, true);
+      });
+    }
+
+    // 注：原"部门 → 业务员"联动 + "展开/收起" 折叠状态相关代码已删除
+    //     —— 筛选条已精简至单行（无需折叠）；部门/业务员/级别 等筛选已下线
+
+    /* ============== 入口 ============== */
+    /* 重置按钮要清空的字段名（不含 type 后缀，精简后只剩 5 项） */
+    const FILTER_FIELDS = ['fId','fEmail','fRegion','fTier','fDateFrom','fDateTo'];
+
+    window.onPageReady = function () {
+      refresh();
+
+      /* Tab 切换：仅切换 pane 显隐 + active 样式（不动数据，每个 pane 状态自然保留） */
+      document.querySelectorAll('.biz-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.type === currentType) return;
+          currentType = btn.dataset.type;
+          document.querySelectorAll('.biz-tab').forEach(b =>
+            b.classList.toggle('active', b.dataset.type === currentType)
+          );
+          document.querySelectorAll('.biz-pane').forEach(p =>
+            p.style.display = (p.dataset.type === currentType) ? '' : 'none'
+          );
+        });
+      });
+
+      /* 事件委托：reset / search 按 data-type 作用于对应 pane */
+      document.body.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-act]');
+        if (!btn) return;
+        const type = btn.dataset.type;
+        if (!type || !TYPES.includes(type)) return;
+        const act = btn.dataset.act;
+
+        if (act === 'reset') {
+          FILTER_FIELDS.forEach(id => {
+            const el = document.getElementById(`${id}-${type}`);
+            if (el) el.value = '';
+          });
+          toast(t('toast.reset'), 'success');
+        }
+        else if (act === 'search') {
+          toast(t('toast.searched'), 'success');
+        }
+      });
+
+      /* 分页 mock 提示（事件委托，refresh 后无需重绑） */
+      document.body.addEventListener('click', (e) => {
+        const b = e.target.closest('.page-btn');
+        if (!b || b.classList.contains('active')) return;
+        toast(t('toast.pagePlaceholder'), 'success');
+      });
+
+      /* === 测试模式 二次确认弹窗：关闭 + 确认 === */
+      document.querySelectorAll('[data-act="close-test"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('testModal'));
+      });
+      document.getElementById('btnTestConfirm').addEventListener('click', confirmToggleTest);
+
+      /* === 添加一级代理（合并版：支持新增 + 升级两种场景） === */
+      // 事件委托：open-add-l1 按钮在 renderFilterBlock 里动态生成
+      document.body.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-act="open-add-l1"]');
+        if (btn) openAddL1Modal();
+      });
+      /* 关闭弹窗 */
+      document.querySelectorAll('[data-act="close-add-l1"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('addL1Modal'));
+      });
+      /* 搜索按钮 + 回车提交 */
+      document.getElementById('btnL1Search').addEventListener('click', doL1Search);
+      document.getElementById('l1Search').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); doL1Search(); }
+      });
+      /* 测试模式复选框联动：勾选 → 展开参数区；取消勾选 → 收起并清空 */
+      document.getElementById('l1EnableTest').addEventListener('change', (e) => {
+        const params = document.getElementById('l1TestParams');
+        if (e.target.checked) {
+          params.style.display = '';
+          resetTestParams('l1RateInput', 'l1ExpireInput');
+        } else {
+          params.style.display = 'none';
+        }
+      });
+      /* 确认（按 mode 分支：升级 / 新增） */
+      document.getElementById('btnL1Confirm').addEventListener('click', confirmAddL1);
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* ============== 通用 tag（与 my-agents 保持一致） ============== */
+    .type-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+    }
+    .tt-kol { background: #ffe4e6; color: #be123c; }
+    .tt-ib  { background: #ede9fe; color: #6d28d9; }
+    .tt-zb  { background: #dcfce7; color: #15803d; }
+
+    .tier-tag {
+      display: inline-block; padding: 2px 9px; border-radius: 10px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-bold); color: #fff;
+    }
+    .tier-l1   { background: #5bc0de; }
+    .tier-l2   { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+    .tier-l3   { background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%); }
+    .tier-l4   { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%); }
+    .tier-l5   { background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%); }
+    .tier-test { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+    .tier-kol-1 { background: linear-gradient(135deg, #f87171 0%, #dc2626 100%); }
+    .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); }
+    .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); }
+
+    .proj-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: var(--fs-body-sm); background: #f0f9ff; color: #0369a1;
+      font-weight: var(--fw-medium);
+    }
+
+    /* 来源 / 渠道 / 国家 标签 */
+    .src-tag, .ch-tag, .ctr-tag {
+      display: inline-block; padding: 2px 7px; border-radius: 3px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-medium);
+      white-space: nowrap;
+    }
+    .src-natural  { background: #f1f5f9; color: #475569; }
+    .src-invite   { background: #ecfeff; color: #0e7490; }
+    .src-promo    { background: #fef3c7; color: #b45309; }
+    .src-internal { background: #f5f3ff; color: #6d28d9; }
+
+    .ch-tag { font-family: ui-monospace, monospace; font-weight: var(--fw-bold); }
+    .ch-web { background: #e0f2fe; color: #0369a1; }
+    .ch-app { background: #dcfce7; color: #166534; }
+    .ch-h5  { background: #fce7f3; color: #be185d; }
+    .ch-pc  { background: #ede9fe; color: #5b21b6; }
+
+    .ctr-tag {
+      background: #f8fafc; color: #334155;
+      border: 1px solid #e2e8f0;
+      font-family: ui-monospace, monospace;
+      font-size: 11.5px;
+    }
+
+    .num    { font-family: ui-monospace, monospace; }
+    .small  { font-size: var(--fs-body-sm); }
+    .strong { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .muted  { color: var(--color-text-muted); }
+    .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+
+    /* ============== 表头帮助图标 ============== */
+    .th-help {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; margin-right: 3px; border-radius: 50%;
+      background: #94a3b8; color: #fff;
+      font-size: 10px; font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+      cursor: help; vertical-align: middle;
+    }
+    .th-help:hover { background: var(--color-primary); }
+
+    /* ============== 业务类型 Tab ============== */
+    .biz-tabs {
+      display: flex; gap: 2px;
+      border-bottom: 1px solid var(--color-border);
+      margin: 6px 0 14px;
+    }
+    .biz-tab {
+      padding: 10px 22px;
+      font-size: var(--fs-body);
+      color: var(--color-text-secondary);
+      background: transparent; border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: -1px;
+      font-family: inherit;
+      font-weight: var(--fw-medium);
+    }
+    .biz-tab:hover { color: var(--color-primary); }
+    .biz-tab.active {
+      color: var(--color-primary);
+      font-weight: var(--fw-bold);
+      border-bottom-color: var(--color-primary);
+    }
+    .biz-tab-count {
+      color: var(--color-text-muted);
+      font-size: var(--fs-meta);
+      margin-left: 4px;
+      font-weight: var(--fw-normal);
+    }
+    .biz-tab.active .biz-tab-count { color: var(--color-primary); }
+
+    /* nowrap：单行不截断 */
+    .nowrap { white-space: nowrap; }
+
+    /* ============== 单行筛选（按钮内联） ============== */
+    .filter-block { position: relative; margin-bottom: 14px; }
+    .filter-block .filter-row {
+      display: flex; align-items: center; gap: 10px;
+      flex-wrap: wrap;
+    }
+    /* 重置/查询按钮组：靠右对齐（同一行内推到末尾） */
+    .filter-row .filter-actions {
+      margin-left: auto;
+      display: flex; gap: 8px;
+    }
+
+    /* 左下角：添加一级代理 按钮区 */
+    .filter-extra {
+      margin-top: 12px;
+      display: flex; align-items: center;
+    }
+    .btn-add-l1 {
+      display: inline-flex; align-items: center;
+      padding: 7px 16px;
+      font-size: var(--fs-body); font-weight: var(--fw-medium);
+      color: #fff; background: var(--color-primary);
+      border: none; border-radius: 5px;
+      cursor: pointer; transition: all 0.15s;
+      font-family: inherit;
+      box-shadow: 0 2px 6px rgba(0, 200, 150, 0.25);
+    }
+    .btn-add-l1:hover {
+      background: var(--color-primary-hover, #00b386);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 10px rgba(0, 200, 150, 0.35);
+    }
+
+    /* 开启/关闭测试 确认弹窗（紧凑式） */
+    .confirm-modal { width: 460px; max-width: 92vw; }
+    .confirm-body {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 4px 0;
+    }
+    .confirm-ico {
+      flex-shrink: 0;
+      color: var(--color-warning, #f5a623);
+      margin-top: 2px;
+    }
+    .confirm-text { flex: 1; min-width: 0; }
+    .confirm-title {
+      font-size: var(--fs-h3);
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+      margin-bottom: 10px;
+      line-height: 1.45;
+    }
+    .confirm-target {
+      display: flex; align-items: center; gap: 4px;
+      padding: 8px 12px;
+      background: #fafbfc;
+      border-radius: 6px;
+      font-size: var(--fs-body-sm);
+    }
+    .confirm-target-label { color: var(--color-text-secondary); }
+    .confirm-target-value {
+      font-family: ui-monospace, monospace;
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+    }
+
+    /* —— 测试参数自定义（开启测试 / 设置为一级代理 + 测试 共用） —— */
+    .test-params {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: #fafbfc;
+      border: 1px solid #eef1f5;
+      border-radius: 8px;
+    }
+    .test-params-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .test-params .form-line {
+      display: flex; flex-direction: column;
+      gap: 5px;
+      margin-bottom: 0;
+    }
+    .test-params .form-line label {
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+      font-weight: var(--fw-medium);
+    }
+    .test-params .form-line input {
+      padding: 7px 10px;
+      font-size: var(--fs-body-sm);
+      border: 1px solid var(--color-border);
+      border-radius: 5px;
+      font-family: inherit;
+      background: #fff;
+    }
+    .test-params .form-line input:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    .test-params-note {
+      margin-top: 10px;
+      padding: 6px 10px;
+      background: #fff8e6;
+      border-left: 3px solid var(--color-warning, #f5a623);
+      border-radius: 4px;
+      font-size: var(--fs-meta);
+      color: #92400e;
+      line-height: 1.5;
+    }
+
+    /* —— 设置为一级代理：复选框 + 副说明 —— */
+    .checkbox-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 14px;
+      padding: 8px 12px;
+      background: #fff8e6;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .checkbox-row input[type="checkbox"] {
+      width: 16px; height: 16px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .checkbox-label {
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-medium);
+      color: var(--color-text);
+    }
+    .checkbox-note {
+      margin: 6px 0 0 24px;
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+      line-height: 1.5;
+    }
+    /* 确认提示 b 标签：在 .confirm-title 中加粗黄色高亮 */
+    .confirm-title b {
+      color: var(--color-warning, #d97706);
+      font-weight: var(--fw-bold);
+    }
+
+    /* 添加一级代理 弹窗：搜索行 + 结果卡 */
+    .search-row {
+      display: flex; gap: 8px; align-items: stretch;
+    }
+    .search-row input {
+      flex: 1; padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px; font-family: inherit;
+    }
+    .search-row input:focus { outline: none; border-color: var(--color-primary); }
+    .btn-inline {
+      padding: 9px 18px; font-size: var(--fs-body);
+      border: none; border-radius: 6px;
+      cursor: pointer; font-family: inherit;
+      color: #fff; background: var(--color-primary);
+      white-space: nowrap;
+    }
+    .btn-inline:hover { background: var(--color-primary-hover, #00b386); }
+
+    .l1-result {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px dashed var(--color-border);
+    }
+    .l1-result-title {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text-secondary);
+      margin-bottom: 8px;
+    }
+    .l1-result-card {
+      padding: 12px 14px;
+      background: #fafbfc;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .l1-info-row {
+      display: flex; align-items: center; gap: 10px;
+      font-size: var(--fs-body-sm);
+    }
+    .l1-info-label {
+      width: 90px;
+      color: var(--color-text-secondary);
+      flex-shrink: 0;
+    }
+    .l1-info-value {
+      color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .l1-info-value.strong { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .l1-info-value.mono { font-family: ui-monospace, monospace; }
+    /* 邀请人邮箱（升级场景）—— 橙色警示，强调"此关系将被解除" */
+    .l1-info-value.l1-info-warn {
+      color: #c2410c;
+      font-weight: var(--fw-semibold);
+    }
+
+    /* 结果卡标题 —— 警告色（用于"已是 L1"场景） */
+    .l1-result-title-warn {
+      color: var(--color-danger, #dc2626);
+      font-weight: var(--fw-semibold);
+    }
+
+    /* 升级场景：解除邀请关系警告条 */
+    .l1-sever-warn {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: #fff7ed;
+      border-left: 3px solid #f97316;
+      border-radius: 4px;
+      font-size: var(--fs-body-sm);
+      color: #9a3412;
+      line-height: 1.6;
+    }
+    .l1-sever-warn b {
+      color: #c2410c;
+      font-weight: var(--fw-semibold);
+    }
+
+    /* 日期范围：保持 row 内排列 */
+    .date-range {
+      display: flex; align-items: center; gap: 4px;
+      min-width: 280px;
+    }
+    .date-range .date-input-wrap { padding: 4px 10px; }
+    .date-range .dt-input { width: 105px; }
+    /* 日期范围前的标签："注册时间" */
+    .date-range-label {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text-secondary);
+      margin-right: 6px;
+      white-space: nowrap;
+    }
+
+    /* ============== 操作列 ============== */
+    .op-cell {
+      text-align: center;
+      white-space: nowrap;
+      font-size: var(--fs-body-sm);
+    }
+    .op-cell .t-act { padding: 2px 4px; }
+    .t-divider {
+      color: var(--color-border);
+      margin: 0 2px;
+      user-select: none;
+    }
+
+    /* ============== 表格横向滚动（带拖拽） ============== */
+    .table-wrap {
+      overflow-x: auto;
+      cursor: grab;
+      -webkit-overflow-scrolling: touch;   /* iOS 平滑滚动 */
+      scroll-behavior: auto;
+    }
+    /* 拖拽中：抓手光标 + 禁用文本选择 */
+    .table-wrap.dragging {
+      cursor: grabbing;
+      user-select: none;
+    }
+    .table-wrap.dragging * { cursor: grabbing !important; }
+    /* 单元格内的按钮/输入仍保留正常光标 */
+    .table-wrap button, .table-wrap a, .table-wrap input, .table-wrap select { cursor: pointer; }
+
+    /* 自定义滚动条（WebKit） */
+    .table-wrap::-webkit-scrollbar { height: 10px; }
+    .table-wrap::-webkit-scrollbar-track {
+      background: #f1f5f9;
+      border-radius: 0 0 8px 8px;
+    }
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 5px;
+      border: 2px solid #f1f5f9;
+    }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    /* Firefox */
+    .table-wrap { scrollbar-color: #cbd5e1 #f1f5f9; scrollbar-width: thin; }
+
+    /* ============== 弹窗（与 my-agents 一致） ============== */
+    .modal { position: fixed; inset: 0; z-index: 999; display: none; }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      animation: modalIn 0.2s; overflow: hidden;
+      max-height: 90vh; display: flex; flex-direction: column;
+    }
+    .small-modal { width: 520px; max-width: 92vw; }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px; border-bottom: 1px solid #f0f3f7; flex-shrink: 0;
+    }
+    .modal-head h3 { font-size: var(--fs-h2); font-weight: var(--fw-bold); color: var(--color-text); }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted); font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 18px 20px; overflow-y: auto; flex: 1; }
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc; flex-shrink: 0;
+    }
+    .modal-foot .btn-outline, .modal-foot .btn-primary {
+      padding: 7px 18px; font-size: var(--fs-body);
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      font-family: inherit; font-weight: var(--fw-medium);
+      border: 1px solid transparent;
+    }
+    .modal-foot .btn-outline { color: var(--color-text); background: #fff; border-color: var(--color-border); }
+    .modal-foot .btn-outline:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .modal-foot .btn-primary { color: #fff; background: var(--color-primary); }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    /* 表单 */
+    .form-line { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .form-line label {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .required { color: var(--color-danger); margin-left: 2px; }
+    .form-line input, .form-line select, .form-line textarea {
+      padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      transition: border-color 0.15s;
+      font-family: inherit;
+      background: #fff;
+      resize: vertical;
+    }
+    .form-line input:disabled, .form-line input[readonly] {
+      background: #fafbfc; color: var(--color-text-secondary); cursor: not-allowed;
+    }
+    .form-line input:focus, .form-line select:focus, .form-line textarea:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    .form-grid-2 {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px;
+    }
+  </style>
+</body>
+</html>

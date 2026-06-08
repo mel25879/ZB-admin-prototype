@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>代理邀请用户</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.invited-users.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=10"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============================================================
+     * 代理邀请用户（全局）
+     * - 平台所有由代理邀请进来的用户
+     * - 双行筛选 + 展开/收起；表格横向滚动 + 拖拽
+     * - 视图为只读，暂无操作列
+     * ============================================================ */
+
+    /* ============== Toast ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== 字典（只保留 ZB 业务类型） ============== */
+    // 注：原本支持 KOL / IB / ZB 三种类型，现按需求精简至仅 ZB
+    //     如需恢复 KOL/IB，把对应 key 加回 TIERS_BY_TYPE 并把 TYPES 数组补齐即可
+    const TYPES = ['ZB'];
+    const TIERS_BY_TYPE = {
+      ZB:  ['L1', 'L2', 'L3'],   // 新增 L3 支持
+    };
+    const TIERS_ALL = (() => {
+      const s = new Set();
+      Object.values(TIERS_BY_TYPE).forEach(arr => arr.forEach(x => s.add(x)));
+      return [...s];
+    })();
+    function tiersForType(type) { return type ? (TIERS_BY_TYPE[type] || []) : TIERS_ALL; }
+
+    const PROJECTS = [
+      { key: 'dana',      name: 'Dana' },
+      { key: 'tradewill', name: 'Tradewill' },
+      { key: 'zibt',      name: 'ZIBT' },
+    ];
+    const CHANNELS  = ['web', 'app', 'h5', 'pc'];
+    const COUNTRIES = ['CN','HK','TW','US','IN','VN','TH','MY','ID','BR','PH','SG','JP','NG'];
+    // 国家区号（用于筛选下拉，按用户需求只展示区号）
+    const DIAL_CODES = {
+      CN: '+86', HK: '+852', TW: '+886', US: '+1',   IN: '+91',
+      VN: '+84', TH: '+66',  MY: '+60',  ID: '+62',  BR: '+55',
+      PH: '+63', SG: '+65',  JP: '+81',  NG: '+234',
+    };
+
+    /* ============== 格式化 / 标签 ============== */
+    function fmtUSDT(v) {
+      return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+    }
+    function projectName(key) { const p = PROJECTS.find(x => x.key === key); return p ? p.name : key; }
+    function typeTag(type) {
+      const map = { KOL: 'tt-kol', IB: 'tt-ib', ZB: 'tt-zb' };
+      return `<span class="type-tag ${map[type]||''}">${type}</span>`;
+    }
+    function tierTag(tier) {
+      const map = {
+        L1: 'tier-l1', L2: 'tier-l2', L3: 'tier-l3', L4: 'tier-l4', L5: 'tier-l5',
+        test: 'tier-test',
+        senior_promoter: 'tier-kol-1', user_agent: 'tier-kol-2', business_agent: 'tier-kol-3',
+      };
+      return `<span class="tier-tag ${map[tier]||''}">${t('myAgent.tier.' + tier.toLowerCase())}</span>`;
+    }
+    function channelTag(c) { return `<span class="ch-tag ch-${c}">${t('agents.channel.' + c)}</span>`; }
+
+    /* 操作列按钮：根据邀请人的代理层级决定目标 tier
+     *   邀请人 L1 → 按钮"设置为二级代理" (target=L2)
+     *   邀请人 L2 → 按钮"设置为三级代理" (target=L3)
+     *   邀请人 L3 → 不显示按钮（最底层不可再下沉） */
+    function promoteButton(u) {
+      // 用户没有邀请人 → 也没有"上级代理"，无法设置为下级
+      if (u.inviter === '-') return '<span class="muted">-</span>';
+      const inviterTier = u.agentTier;
+      let targetTier;
+      if (inviterTier === 'L1') targetTier = 'L2';
+      else if (inviterTier === 'L2') targetTier = 'L3';
+      else return '<span class="muted">-</span>'; // L3 邀请的用户不可再升级
+      const tierName = t('invitedUser.tierName.' + targetTier.toLowerCase());
+      return `<button class="t-act" data-act="promote" data-target="${targetTier}">${t('invitedUser.btn.promote', { tier: tierName })}</button>`;
+    }
+    // 表格列只显示区号（如 +62、+91），保留 cc 在 title 里以便 hover 查看完整国家
+    function countryTag(cc){
+      const dial = DIAL_CODES[cc] || cc;
+      return `<span class="ctr-tag" title="${cc} · ${t('agents.country.' + cc)}">${dial}</span>`;
+    }
+
+    /* ============== Mock 数据（≤ 10 条，覆盖 L1 / L2 / L3 三种邀请人） ============== */
+    // localStorage key 升版 v4 → v5：同步精简后的数据
+    // agentTier 含义：邀请人的代理层级
+    //   L1 → 该用户可被设置为"二级代理"
+    //   L2 → 该用户可被设置为"三级代理"
+    //   L3 → 该用户为最底层链路，不可再设置为下级代理
+    const USERS_KEY = 'zb_admin_invited_users_v5';
+    const DEFAULT_USERS = [
+      { userId:'U200001', email:'tony@gmail.com',   regTime:'2026-05-19 14:23', country:'IN', channel:'app', inviter:'alice@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:520.00,  tradeVolume:18500.50, commission:35.50 },
+      { userId:'U200002', email:'lucy@outlook.com', regTime:'2026-05-18 09:12', country:'ID', channel:'web', inviter:'bob@outlook.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:300.00,  tradeVolume:12000.00, commission:12.80 },
+      { userId:'U200003', email:'kevin@163.com',    regTime:'2026-05-15 22:48', country:'IN', channel:'h5',  inviter:'frank@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:0, deposit:50.00,   tradeVolume:0,        commission:0     },
+      { userId:'U200004', email:'mike@qq.com',      regTime:'2026-05-12 11:30', country:'CN', channel:'pc',  inviter:'amy@163.com',       agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:1500.00, tradeVolume:88200.00, commission:120.40},
+      { userId:'U200005', email:'nina@hotmail.com', regTime:'2026-05-10 16:05', country:'TH', channel:'app', inviter:'mary@hotmail.com',  agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:200.00,  tradeVolume:5800.00,  commission:4.20  },
+      { userId:'U200006', email:'oscar@gmail.com',  regTime:'2026-05-08 20:31', country:'NG', channel:'app', inviter:'sara@gmail.com',    agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:0, deposit:0,       tradeVolume:0,        commission:0     },
+      { userId:'U200007', email:'paul@163.com',     regTime:'2026-05-06 08:14', country:'IN', channel:'web', inviter:'cathy@qq.com',      agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:680.00,  tradeVolume:32100.00, commission:48.30 },
+      { userId:'U200008', email:'queen@qq.com',     regTime:'2026-05-05 13:20', country:'BR', channel:'web', inviter:'lucas@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:400.00,  tradeVolume:14200.75, commission:18.20 },
+      { userId:'U200009', email:'ricky@gmail.com',  regTime:'2026-05-03 19:08', country:'VN', channel:'app', inviter:'eva@163.com',       agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:850.00,  tradeVolume:8420.30,  commission:9.80  },
+      { userId:'U200010', email:'sophie@163.com',   regTime:'2026-05-02 10:30', country:'PH', channel:'h5',  inviter:'derek@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:230.00,  tradeVolume:5240.50,  commission:6.50  },
+    ];
+
+    function loadUsers() {
+      try {
+        const d = JSON.parse(localStorage.getItem(USERS_KEY));
+        if (Array.isArray(d) && d.length) return d;
+      } catch (e) {}
+      return DEFAULT_USERS.map(x => ({ ...x }));
+    }
+    function saveUsers(arr) {
+      try { localStorage.setItem(USERS_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    let USERS = loadUsers();
+    let editingId = null;
+
+    /* ============== 可用代理来源 ============== */
+    /* 优先读 agents.html 的数据；没有则用 mock 中的所有邀请人去重作为兜底 */
+    function loadAvailableAgents() {
+      try {
+        const d = JSON.parse(localStorage.getItem('zb_admin_agents_v6'));
+        if (Array.isArray(d) && d.length) {
+          return d.map(a => ({
+            email:   a.email,
+            type:    a.type,
+            tier:    a.tier,
+            project: a.project,
+          }));
+        }
+      } catch (e) {}
+      const seen = new Map();
+      USERS.forEach(u => {
+        if (u.inviter !== '-' && !seen.has(u.inviter)) {
+          seen.set(u.inviter, { email: u.inviter, type: u.agentType, tier: u.agentTier, project: u.project });
+        }
+      });
+      return [...seen.values()];
+    }
+
+    /* ============== 渲染：表格 ============== */
+    function renderTable() {
+      if (!USERS.length) {
+        return `<div class="empty-state"><div class="empty-icon">👥</div>${t('invitedUser.empty')}</div>`;
+      }
+      const rows = USERS.map(u => `
+        <tr data-id="${u.userId}">
+          <td class="num">${u.userId}</td>
+          <td class="nowrap">${u.email}</td>
+          <td class="num small nowrap">${u.regTime}</td>
+          <td>${countryTag(u.country)}</td>
+          <td>${channelTag(u.channel)}</td>
+          <td class="nowrap">${u.inviter === '-' ? '<span class="muted">-</span>' : u.inviter}</td>
+          <td class="text-center">${tierTag(u.agentTier)}</td>
+          <td class="num text-right">${fmtUSDT(u.deposit)}</td>
+          <td class="num text-right">${fmtUSDT(u.tradeVolume)}</td>
+          <td class="op-cell">${promoteButton(u)}</td>
+        </tr>
+      `).join('');
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <colgroup>
+              <col style="width:100px"><col style="width:240px"><col style="width:170px"><col style="width:130px">
+              <col style="width:80px"><col style="width:240px"><col style="width:120px">
+              <col style="width:140px"><col style="width:160px"><col style="width:120px">
+            </colgroup>
+            <thead><tr>
+              <th>${t('invitedUser.col.userId')}</th>
+              <th>${t('invitedUser.col.userEmail')}</th>
+              <th>${t('invitedUser.col.regTime')}</th>
+              <th>${t('invitedUser.col.country')}</th>
+              <th>${t('invitedUser.col.channel')}</th>
+              <th>${t('invitedUser.col.inviter')}</th>
+              <th class="text-center">${t('invitedUser.col.agentTier')}</th>
+              <th class="text-right">${t('invitedUser.col.deposit')}</th>
+              <th class="text-right">${t('invitedUser.col.tradeVolume')}</th>
+              <th class="text-center">${t('invitedUser.col.actions')}</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /* ============== 渲染：分页（mock） ============== */
+    function pagination(total) {
+      const totalPages = Math.max(1, Math.ceil(total / 20));
+      return `
+        <div class="pagination">
+          <span class="page-info">共 <b>${total}</b> 条 / <b>${totalPages}</b> 页</span>
+          <div class="page-btns">
+            <button class="page-btn">«</button>
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            ${totalPages > 1 ? `<button class="page-btn">2</button>` : ''}
+            <button class="page-btn">›</button>
+            <button class="page-btn">»</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.invited-users.title')}</h1>
+      </div>
+
+      <div class="card sec-card">
+        <!-- ===== 单行筛选（已精简：删除 注册渠道 / 项目 / 是否有交易 / 代理级别） ===== -->
+        <div class="filter-block" id="filterBlock">
+          <div class="filter-row filter-row-1">
+            <input  class="form-input filter-input" id="fUserId"  placeholder="${t('invitedUser.filter.userId')}" />
+            <input  class="form-input filter-input" id="fEmail"   placeholder="${t('invitedUser.filter.userEmail')}" />
+            <input  class="form-input filter-input" id="fInviter" placeholder="${t('invitedUser.filter.inviter')}" />
+            <select class="form-select filter-input" id="fCountry">
+              <option value="">${t('invitedUser.filter.country')}</option>
+              ${COUNTRIES.map(c => `<option value="${c}">${DIAL_CODES[c]}</option>`).join('')}
+            </select>
+            <div class="date-range">
+              <span class="date-range-label">${t('invitedUser.filter.regTime')}</span>
+              <div class="date-input-wrap">
+                <span class="date-ico">📅</span>
+                <input class="dt-input" type="date" id="fDateFrom" title="${t('invitedUser.filter.regTime')}" />
+              </div>
+              <span class="dt-sep">~</span>
+              <div class="date-input-wrap">
+                <input class="dt-input" type="date" id="fDateTo" title="${t('invitedUser.filter.regTime')}" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 底部：重置 / 搜索（折叠按钮已删除：单行筛选不需要展开/收起） -->
+          <div class="filter-bottom">
+            <div class="filter-actions">
+              <button class="btn-reset" data-act="reset">${t('common.reset')}</button>
+              <button class="btn-query" data-act="search">${t('common.search')}</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="tableArea"></div>
+        ${pagination(USERS.length)}
+      </div>
+
+      <!-- ===== 设置下级代理 确认弹窗（标题/按钮/提示按目标 tier 动态生成） ===== -->
+      <div class="modal" id="promoteModal">
+        <div class="modal-mask" data-act="close-promote"></div>
+        <div class="modal-body confirm-modal">
+          <div class="modal-head">
+            <h3 id="pModalTitle"></h3>
+            <button class="modal-close" data-act="close-promote">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="confirm-body">
+              <svg class="confirm-ico" viewBox="0 0 24 24" width="22" height="22" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"/>
+                <line x1="12" y1="8" x2="12" y2="13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="12" cy="16" r="1.2" fill="currentColor"/>
+              </svg>
+              <div class="confirm-text">
+                <div class="confirm-title" id="pConfirmTitle"></div>
+                <div class="confirm-target">
+                  <span class="confirm-target-label">${t('invitedUser.col.userEmail')}：</span>
+                  <span class="confirm-target-value" id="pTarget"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-promote">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnConfirmPromote">${t('common.confirm')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    function openModal(id)  { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    /* ============== 行内操作绑定 ============== */
+    let editingTargetTier = null;  // 'L2' | 'L3'，当前要设置成的目标 tier
+
+    function bindRowActions() {
+      document.querySelectorAll('.biz-table tbody tr').forEach((tr) => {
+        const id = tr.dataset.id;
+        tr.querySelectorAll('[data-act]').forEach((b) => {
+          b.addEventListener('click', () => {
+            const u = USERS.find(x => x.userId === id);
+            if (!u || b.dataset.act !== 'promote') return;
+
+            /* 没有上级代理 → 无法设置为下级代理 */
+            if (u.inviter === '-') {
+              return toast(t('invitedUser.promote.val.noInviter'), 'danger');
+            }
+            /* L3 邀请的用户已是最底层链路，不可再下沉 */
+            if (u.agentTier === 'L3') {
+              return toast(t('invitedUser.promote.val.l3NoPromote'), 'danger');
+            }
+
+            /* 读取按钮上的目标 tier，动态填充弹窗 */
+            editingId = id;
+            editingTargetTier = b.dataset.target;  // 'L2' | 'L3'
+            const tierName = t('invitedUser.tierName.' + editingTargetTier.toLowerCase());
+            document.getElementById('pModalTitle').textContent = t('invitedUser.modal.promote', { tier: tierName });
+            document.getElementById('pConfirmTitle').textContent = t('invitedUser.promote.confirmTitle', { tier: tierName });
+            document.getElementById('pTarget').textContent = u.email;
+            openModal('promoteModal');
+          });
+        });
+      });
+    }
+
+    function refresh() {
+      document.getElementById('tableArea').innerHTML = renderTable();
+      bindRowActions();
+      setupDragScroll();
+    }
+
+    /* ============== 表格鼠标拖拽横向滚动（与 agents.html 一致） ============== */
+    const _drag = { wrap: null, down: false, moved: false, sx: 0, sl: 0 };
+    document.addEventListener('mouseup', () => {
+      if (_drag.down) {
+        _drag.down = false;
+        _drag.wrap && _drag.wrap.classList.remove('dragging');
+      }
+    });
+    function setupDragScroll() {
+      const wrap = document.querySelector('.table-wrap');
+      if (!wrap) return;
+      _drag.wrap = wrap;
+
+      wrap.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button, a, input, select, textarea')) return;
+        _drag.down  = true;
+        _drag.moved = false;
+        _drag.sx    = e.pageX - wrap.offsetLeft;
+        _drag.sl    = wrap.scrollLeft;
+        wrap.classList.add('dragging');
+      });
+      wrap.addEventListener('mousemove', (e) => {
+        if (!_drag.down) return;
+        e.preventDefault();
+        const x = e.pageX - wrap.offsetLeft;
+        const walk = x - _drag.sx;
+        if (Math.abs(walk) > 3) _drag.moved = true;
+        wrap.scrollLeft = _drag.sl - walk;
+      });
+      wrap.addEventListener('click', (e) => {
+        if (_drag.moved) {
+          e.stopPropagation(); e.preventDefault();
+          _drag.moved = false;
+        }
+      }, true);
+    }
+
+    // 注：原 "类型 → 层级" 联动 + "展开/收起" 折叠状态相关代码已删除
+    //     —— 筛选条已精简至单行（无需折叠）
+
+    /* ============== 入口 ============== */
+    window.onPageReady = function () {
+      refresh();
+
+      document.querySelectorAll('.filter-actions [data-act]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const act = b.dataset.act;
+          if (act === 'reset') {
+            ['fUserId','fEmail','fInviter','fCountry','fDateFrom','fDateTo'].forEach(id => {
+              const el = document.getElementById(id);
+              if (el) el.value = '';
+            });
+            toast(t('toast.reset'), 'success');
+          } else if (act === 'search') {
+            toast(t('toast.searched'), 'success');
+          }
+        });
+      });
+
+      /* 弹窗关闭 */
+      document.querySelectorAll('[data-act="close-promote"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('promoteModal'));
+      });
+
+      /* 确认设置为下级代理（mock：把用户的 agentTier 改为目标 tier）
+       * - 邀请人 L1 → 用户变 L2
+       * - 邀请人 L2 → 用户变 L3
+       */
+      document.getElementById('btnConfirmPromote').addEventListener('click', () => {
+        const u = USERS.find(x => x.userId === editingId);
+        if (!u || !editingTargetTier) return;
+        u.agentTier = editingTargetTier;
+        saveUsers(USERS); refresh();
+        closeModal('promoteModal');
+        const tierName = t('invitedUser.tierName.' + editingTargetTier.toLowerCase());
+        toast(t('invitedUser.promote.toast.done', { n: u.email, tier: tierName }), 'success');
+      });
+
+      document.querySelectorAll('.page-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          if (b.classList.contains('active')) return;
+          toast(t('toast.pagePlaceholder'), 'success');
+        });
+      });
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* ============== 通用 tag（与 agents 一致） ============== */
+    .type-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-bold);
+      font-family: ui-monospace, monospace;
+    }
+    .tt-kol { background: #ffe4e6; color: #be123c; }
+    .tt-ib  { background: #ede9fe; color: #6d28d9; }
+    .tt-zb  { background: #dcfce7; color: #15803d; }
+
+    .tier-tag {
+      display: inline-block; padding: 2px 9px; border-radius: 10px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-bold); color: #fff;
+    }
+    .tier-l1   { background: #5bc0de; }
+    .tier-l2   { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+    .tier-l3   { background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%); }
+    .tier-l4   { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%); }
+    .tier-l5   { background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%); }
+    .tier-test { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+    .tier-kol-1 { background: linear-gradient(135deg, #f87171 0%, #dc2626 100%); }
+    .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); }
+    .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); }
+
+    .proj-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: var(--fs-body-sm); background: #f0f9ff; color: #0369a1;
+      font-weight: var(--fw-medium);
+    }
+    .ch-tag, .ctr-tag {
+      display: inline-block; padding: 2px 7px; border-radius: 3px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-medium);
+      white-space: nowrap;
+    }
+    .ch-tag { font-family: ui-monospace, monospace; font-weight: var(--fw-bold); }
+    .ch-web { background: #e0f2fe; color: #0369a1; }
+    .ch-app { background: #dcfce7; color: #166534; }
+    .ch-h5  { background: #fce7f3; color: #be185d; }
+    .ch-pc  { background: #ede9fe; color: #5b21b6; }
+    .ctr-tag {
+      background: #f8fafc; color: #334155;
+      border: 1px solid #e2e8f0;
+      font-family: ui-monospace, monospace;
+      font-size: 11.5px;
+    }
+
+    /* 是否有交易 */
+    .trade-yes { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .trade-no  { color: var(--color-text-muted); }
+
+    .num    { font-family: ui-monospace, monospace; }
+    .small  { font-size: var(--fs-body-sm); }
+    .strong { color: var(--color-primary); font-weight: var(--fw-semibold); }
+    .muted  { color: var(--color-text-muted); }
+    /* 单行不截断：内容完整展示；若超出列宽，依赖外层 .table-wrap 横向滚动 */
+    .nowrap { white-space: nowrap; }
+
+    /* ============== 双行筛选 + 展开/收起 ============== */
+    .filter-block { position: relative; margin-bottom: 14px; }
+    .filter-block .filter-row { margin-bottom: 10px; }
+    .filter-block .filter-row + .filter-row { margin-top: 0; }
+    .filter-block.collapsed .filter-row-2 { display: none; }
+
+    .date-range {
+      display: flex; align-items: center; gap: 4px;
+      min-width: 280px;
+    }
+    .date-range .date-input-wrap { padding: 4px 10px; }
+    .date-range .dt-input { width: 105px; }
+    /* 日期范围前的标签："注册时间" */
+    .date-range-label {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text-secondary);
+      margin-right: 6px;
+      white-space: nowrap;
+    }
+
+    .filter-bottom {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-top: 6px;
+      border-top: 1px dashed var(--color-border);
+      margin-top: 4px;
+    }
+    .btn-toggle {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 6px 10px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--color-text-muted);
+      font-size: var(--fs-body-sm); font-family: inherit;
+      border-radius: 4px; transition: all .15s;
+    }
+    .btn-toggle:hover { color: var(--color-primary); background: #f0f9ff; }
+    .filter-bottom .filter-actions { margin-left: 0; }
+
+    /* ============== 表格横向滚动（带拖拽） ============== */
+    .table-wrap {
+      overflow-x: auto;
+      cursor: grab;
+      -webkit-overflow-scrolling: touch;
+    }
+    .table-wrap.dragging {
+      cursor: grabbing;
+      user-select: none;
+    }
+    .table-wrap.dragging * { cursor: grabbing !important; }
+    .table-wrap button, .table-wrap a, .table-wrap input, .table-wrap select { cursor: pointer; }
+
+    .table-wrap::-webkit-scrollbar { height: 10px; }
+    .table-wrap::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 0 0 8px 8px; }
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: #cbd5e1; border-radius: 5px;
+      border: 2px solid #f1f5f9;
+    }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .table-wrap { scrollbar-color: #cbd5e1 #f1f5f9; scrollbar-width: thin; }
+
+    /* ============== 操作列 ============== */
+    .op-cell {
+      text-align: center;
+      white-space: nowrap;
+      font-size: var(--fs-body-sm);
+    }
+    .op-cell .t-act { padding: 2px 6px; }
+
+    /* ============== 弹窗（与 agents 一致） ============== */
+    .modal { position: fixed; inset: 0; z-index: 999; display: none; }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      animation: modalIn 0.2s; overflow: hidden;
+      max-height: 90vh; display: flex; flex-direction: column;
+    }
+    .small-modal { width: 560px; max-width: 92vw; }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px; border-bottom: 1px solid #f0f3f7; flex-shrink: 0;
+    }
+    .modal-head h3 { font-size: var(--fs-h2); font-weight: var(--fw-bold); color: var(--color-text); }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted); font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 18px 20px; overflow-y: auto; flex: 1; }
+
+    /* —— 设置二级代理 确认弹窗（简洁版） —— */
+    .confirm-modal { width: 460px; max-width: 92vw; }
+    .confirm-body {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 4px 0;
+    }
+    .confirm-ico {
+      flex-shrink: 0;
+      color: var(--color-warning, #f5a623);
+      margin-top: 2px;
+    }
+    .confirm-text { flex: 1; min-width: 0; }
+    .confirm-title {
+      font-size: var(--fs-h3);
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+      margin-bottom: 10px;
+      line-height: 1.45;
+    }
+    .confirm-target {
+      display: flex; align-items: center; gap: 4px;
+      padding: 8px 12px;
+      background: #fafbfc;
+      border-radius: 6px;
+      font-size: var(--fs-body-sm);
+    }
+    .confirm-target-label { color: var(--color-text-secondary); }
+    .confirm-target-value {
+      font-family: ui-monospace, monospace;
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+    }
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc; flex-shrink: 0;
+    }
+    .modal-foot .btn-outline, .modal-foot .btn-primary {
+      padding: 7px 18px; font-size: var(--fs-body);
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      font-family: inherit; font-weight: var(--fw-medium);
+      border: 1px solid transparent;
+    }
+    .modal-foot .btn-outline { color: var(--color-text); background: #fff; border-color: var(--color-border); }
+    .modal-foot .btn-outline:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .modal-foot .btn-primary { color: #fff; background: var(--color-primary); }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    /* 表单 */
+    .form-line { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .form-line label {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .required { color: var(--color-danger); margin-left: 2px; }
+    .form-line input, .form-line select, .form-line textarea {
+      padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      transition: border-color 0.15s;
+      font-family: inherit;
+      background: #fff;
+      resize: vertical;
+    }
+    .form-line input:disabled, .form-line input[readonly] {
+      background: #fafbfc; color: var(--color-text-secondary); cursor: not-allowed;
+    }
+    .form-line input:focus, .form-line select:focus, .form-line textarea:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    .form-grid-2 {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px;
+    }
+  </style>
+</body>
+</html>

@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>角色管理</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.system-roles.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=2"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    /* 登录守卫 */
+    (function() { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============== Toast ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== 权限模型 ============== */
+    // 项目（可配置的项目列表）
+    const PROJECTS = [
+      { key: 'dana',      name: 'Dana' },
+      { key: 'tradewill', name: 'Tradewill' },
+      { key: 'zibt',      name: 'ZIBT' },
+    ];
+
+    // 地区（国家代码）
+    const REGIONS = [
+      { code: '+234', label: 'NG' }, { code: '+95',  label: 'MM' }, { code: '+91',  label: 'IN' },
+      { code: '+880', label: 'BD' }, { code: '+84',  label: 'VN' }, { code: '+63',  label: 'PH' },
+      { code: '+62',  label: 'ID' }, { code: '+66',  label: 'TH' }, { code: '+60',  label: 'MY' },
+      { code: '+52',  label: 'MX' }, { code: '+55',  label: 'BR' }, { code: '+1',   label: 'US' },
+      { code: '+27',  label: 'ZA' }, { code: '+92',  label: 'PK' }, { code: '+86',  label: 'CN' },
+      { code: '+852', label: 'HK' }, { code: '+886', label: 'TW' }, { code: 'other', label: 'Other' },
+    ];
+
+    // 菜单 + 每个菜单支持的操作
+    const PERM_MODULES = [
+      {
+        moduleKey: 'menu.users',
+        items: [
+          { key: 'invited-users', nameKey: 'menu.invited-users', actions: ['view','export'] },
+          { key: 'my-agents',     nameKey: 'menu.my-agents',     actions: ['view','edit','export'] },
+          { key: 'agents',        nameKey: 'menu.agents',        actions: ['view','add','edit','delete','audit','export'] },
+        ],
+      },
+      {
+        moduleKey: 'menu.reports',
+        items: [
+          { key: 'reports-agent-perf', nameKey: 'menu.reports-agent-perf', actions: ['view','export'] },
+        ],
+      },
+      {
+        moduleKey: 'menu.system',
+        items: [
+          { key: 'system-users', nameKey: 'menu.system-users', actions: ['view','add','edit','delete'] },
+          { key: 'system-roles', nameKey: 'menu.system-roles', actions: ['view','add','edit','delete','config'] },
+          { key: 'system-menus', nameKey: 'menu.system-menus', actions: ['view','add','edit','delete'] },
+        ],
+      },
+    ];
+
+    /* ============== Mock 数据 ============== */
+    const ROLES_KEY = 'zb_admin_roles_v1';
+    const DEFAULT_ROLES = [
+      {
+        id: 1, code: 'admin', nameZh: '超级管理员', nameEn: 'Super Admin',
+        descZh: '拥有全部权限', descEn: 'Full permissions',
+        userCount: 1, createdAt: '2026-04-01', status: 1,
+        permissions: {
+          projects: ['dana', 'tradewill', 'zibt'],
+          regions: '*',  // * 表示全部
+          menus: '*',
+        },
+      },
+      {
+        id: 2, code: 'ops', nameZh: '运营', nameEn: 'Operations',
+        descZh: '运营日常管理', descEn: 'Daily operations',
+        userCount: 2, createdAt: '2026-04-12', status: 1,
+        permissions: {
+          projects: ['dana', 'tradewill'],
+          regions: ['+91', '+62', '+66', '+60'],
+          menus: { 'invited-users.view': 1, 'invited-users.export': 1, 'agents.view': 1, 'reports-agent-perf.view': 1, 'reports-agent-perf.export': 1 },
+        },
+      },
+      {
+        id: 3, code: 'cs', nameZh: '客服', nameEn: 'Customer Service',
+        descZh: '处理用户咨询', descEn: 'User support',
+        userCount: 1, createdAt: '2026-04-20', status: 1,
+        permissions: {
+          projects: ['dana'],
+          regions: ['+86', '+852', '+886'],
+          menus: { 'invited-users.view': 1, 'my-agents.view': 1, 'agents.view': 1 },
+        },
+      },
+      {
+        id: 4, code: 'risk', nameZh: '风控', nameEn: 'Risk Control',
+        descZh: '审核与风险管控', descEn: 'Audit & risk',
+        userCount: 1, createdAt: '2026-05-01', status: 1,
+        permissions: {
+          projects: ['dana', 'tradewill', 'zibt'],
+          regions: '*',
+          menus: { 'agents.view': 1, 'agents.audit': 1, 'agents.edit': 1, 'reports-agent-perf.view': 1 },
+        },
+      },
+      {
+        id: 5, code: 'fin', nameZh: '财务', nameEn: 'Finance',
+        descZh: '资金审核与对账', descEn: 'Finance audit',
+        userCount: 1, createdAt: '2026-05-10', status: 0,
+        permissions: {
+          projects: ['dana', 'tradewill', 'zibt'],
+          regions: '*',
+          menus: { 'reports-agent-perf.view': 1, 'reports-agent-perf.export': 1 },
+        },
+      },
+    ];
+
+    function loadRoles() {
+      try {
+        const d = JSON.parse(localStorage.getItem(ROLES_KEY));
+        if (Array.isArray(d) && d.length) return d;
+      } catch (e) {}
+      return DEFAULT_ROLES.slice();
+    }
+    function saveRoles(arr) {
+      try { localStorage.setItem(ROLES_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    let ROLES = loadRoles();
+    let editingId = null;
+    let permEditingId = null;
+    // 草稿格式：{ projects: ['dana',...], regions: ['+86',...]|'*', menus: {'k.action':1}|'*', selectedMenuKey: 'invited-users' }
+    let permDraft = { projects: [], regions: [], menus: {}, selectedMenuKey: null };
+
+    /* ============== 渲染表格 ============== */
+    function renderTable() {
+      const lang = getLang();
+      return `
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <colgroup>
+              <col style="width:13%">
+              <col style="width:15%">
+              <col style="width:22%">
+              <col style="width:10%">
+              <col style="width:12%">
+              <col style="width:8%">
+              <col style="width:20%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>${t('role.col.code')}</th>
+                <th>${t('role.col.name')}</th>
+                <th>${t('role.col.desc')}</th>
+                <th class="text-center">${t('role.col.userCount')}</th>
+                <th>${t('role.col.created')}</th>
+                <th class="text-center">${t('role.col.status')}</th>
+                <th class="text-center">${t('role.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${ROLES.length ? ROLES.map((r) => `
+                <tr data-id="${r.id}">
+                  <td class="mono"><b>${r.code}</b></td>
+                  <td><b>${lang === 'en' ? r.nameEn : r.nameZh}</b></td>
+                  <td class="muted">${lang === 'en' ? r.descEn : r.descZh}</td>
+                  <td class="text-center"><b class="num">${r.userCount}</b></td>
+                  <td class="muted">${r.createdAt}</td>
+                  <td class="text-center">
+                    <span class="st-tag ${r.status ? 'st-active' : 'st-disabled'}">
+                      ${r.status ? t('common.statusEnabled') : t('common.statusDisabled')}
+                    </span>
+                  </td>
+                  <td class="text-center">
+                    <button class="t-act" data-act="perm" data-id="${r.id}">${t('role.btnPerm')}</button>
+                    <button class="t-act" data-act="edit" data-id="${r.id}">${t('common.edit')}</button>
+                    <button class="t-act" data-act="toggle" data-id="${r.id}">${r.status ? t('common.disable') : t('common.enable')}</button>
+                    <button class="t-act t-del" data-act="del" data-id="${r.id}">${t('common.delete')}</button>
+                  </td>
+                </tr>
+              `).join('') : emptyRow(7)}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function emptyRow(cols) {
+      return `
+        <tr class="empty-row">
+          <td colspan="${cols}">
+            <div class="empty-cell">
+              <svg viewBox="0 0 64 64" width="48" height="48" class="empty-svg">
+                <rect x="8" y="14" width="48" height="38" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+                <line x1="8" y1="24" x2="56" y2="24" stroke="#cbd5e1" stroke-width="1.5"/>
+              </svg>
+              <span>${t('role.empty')}</span>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    function pagination(total) {
+      const totalPages = Math.max(1, Math.ceil(total / 20));
+      return `
+        <div class="pagination">
+          <span class="page-info">共 <b>${total}</b> 条 / <b>${totalPages}</b> 页</span>
+          <div class="page-btns">
+            <button class="page-btn">«</button>
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">›</button>
+            <button class="page-btn">»</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============== 权限渲染：项目 / 地区 / 菜单树 / 菜单详情 ============== */
+    function isMenuChecked(permKey) {
+      if (permDraft.menus === '*') return true;
+      return !!(permDraft.menus && permDraft.menus[permKey]);
+    }
+    function isRegionChecked(code) {
+      if (permDraft.regions === '*') return true;
+      return Array.isArray(permDraft.regions) && permDraft.regions.includes(code);
+    }
+    function isProjectChecked(key) {
+      return Array.isArray(permDraft.projects) && permDraft.projects.includes(key);
+    }
+
+    /* 项目 checkbox 区 */
+    function renderProjects() {
+      return PROJECTS.map((p) => `
+        <label class="perm-pill">
+          <input type="checkbox" data-proj="${p.key}" ${isProjectChecked(p.key) ? 'checked' : ''} />
+          <span>${p.name}</span>
+        </label>
+      `).join('');
+    }
+
+    /* 地区 checkbox 网格 */
+    function renderRegions() {
+      const all = REGIONS.every((r) => isRegionChecked(r.code));
+      const items = REGIONS.map((r) => `
+        <label class="perm-pill perm-pill-region">
+          <input type="checkbox" data-region="${r.code}" ${isRegionChecked(r.code) ? 'checked' : ''} />
+          <span>${r.code === 'other' ? r.label : r.code + ' (' + r.label + ')'}</span>
+        </label>
+      `).join('');
+      return `
+        <label class="perm-pill perm-pill-all">
+          <input type="checkbox" id="regionSelectAll" ${all ? 'checked' : ''} />
+          <span><b>${t('role.perm.selectAllRegions')}</b></span>
+        </label>
+        ${items}
+      `;
+    }
+
+    /* 左侧菜单树（带 checkbox = 是否给该菜单"查看"权限）*/
+    function renderMenuTree() {
+      const html = PERM_MODULES.map((mod) => {
+        const items = mod.items.map((it) => {
+          // 该菜单是否选中：任一 action 选中即视为选中
+          const anyChecked = it.actions.some((a) => isMenuChecked(`${it.key}.${a}`));
+          const allChecked = it.actions.every((a) => isMenuChecked(`${it.key}.${a}`));
+          const isSel = permDraft.selectedMenuKey === it.key;
+          return `
+            <li>
+              <div class="tree-menu-item ${isSel ? 'selected' : ''}" data-select-menu="${it.key}">
+                <input type="checkbox" data-menu-toggle="${it.key}" ${allChecked ? 'checked' : ''} ${(anyChecked && !allChecked) ? "ref='indeterminate'" : ''} />
+                <span class="tree-menu-name">${t(it.nameKey)}</span>
+              </div>
+            </li>
+          `;
+        }).join('');
+        return `
+          <li class="tree-module">
+            <div class="tree-module-name">${t(mod.moduleKey)}</div>
+            <ul>${items}</ul>
+          </li>
+        `;
+      }).join('');
+      return `<ul class="perm-tree">${html}</ul>`;
+    }
+
+    /* 右侧详情：选中菜单的操作 */
+    function renderMenuDetail() {
+      const key = permDraft.selectedMenuKey;
+      if (!key) {
+        return `<div class="perm-detail-empty">${t('role.perm.selectNone')}</div>`;
+      }
+      let target = null, targetMod = null;
+      PERM_MODULES.some((m) => {
+        const f = m.items.find((it) => it.key === key);
+        if (f) { target = f; targetMod = m; return true; }
+      });
+      if (!target) return `<div class="perm-detail-empty">${t('role.perm.selectNone')}</div>`;
+
+      const allChecked = target.actions.every((a) => isMenuChecked(`${key}.${a}`));
+      const actionsHtml = target.actions.map((act) => {
+        const pk = `${key}.${act}`;
+        return `
+          <label class="perm-pill">
+            <input type="checkbox" data-action-key="${pk}" ${isMenuChecked(pk) ? 'checked' : ''} />
+            <span>${t('role.perm.action.' + act)}</span>
+          </label>
+        `;
+      }).join('');
+
+      return `
+        <div class="perm-detail-head">
+          <span class="perm-detail-path">${t('role.perm.currentMenu')}：${t(targetMod.moduleKey)} <span class="muted">›</span> ${t(target.nameKey)}</span>
+        </div>
+        <div class="perm-detail-body">
+          <label class="perm-pill perm-pill-all">
+            <input type="checkbox" id="detailSelectAll" ${allChecked ? 'checked' : ''} />
+            <span><b>${t('role.perm.selectAll')}</b></span>
+          </label>
+          ${actionsHtml}
+        </div>
+      `;
+    }
+
+    function countMenuPerms() {
+      if (permDraft.menus === '*') {
+        let total = 0;
+        PERM_MODULES.forEach(m => m.items.forEach(it => total += it.actions.length));
+        return total;
+      }
+      return Object.keys(permDraft.menus || {}).filter(k => permDraft.menus[k]).length;
+    }
+    function totalCount() {
+      const projects = (permDraft.projects || []).length;
+      const regions = permDraft.regions === '*' ? REGIONS.length : (permDraft.regions || []).length;
+      const menus = countMenuPerms();
+      return { projects, regions, menus };
+    }
+
+    /* ============== 主框架 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.system-roles.title')}</h1>
+        <p class="page-desc">${t('page.system-roles.desc')}</p>
+      </div>
+
+      <div class="card sec-card">
+        <div class="filter-row">
+          <input type="text" class="form-input filter-input" placeholder="${t('role.filter.kw')}" id="kw" />
+          <select class="form-select filter-input" id="filterStatus">
+            <option value="">${t('role.filter.status')}</option>
+            <option value="1">${t('common.statusEnabled')}</option>
+            <option value="0">${t('common.statusDisabled')}</option>
+          </select>
+          <div class="filter-actions">
+            <button class="btn-reset" data-act="reset">${t('common.reset')}</button>
+            <button class="btn-query" data-act="search">${t('common.search')}</button>
+            <button class="btn-add" id="btnAdd">
+              <svg viewBox="0 0 24 24" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+              ${t('role.btnAdd')}
+            </button>
+          </div>
+        </div>
+
+        <div id="tableArea"></div>
+        ${pagination(ROLES.length)}
+      </div>
+
+      <!-- 新增/编辑 角色弹窗 -->
+      <div class="modal" id="roleModal">
+        <div class="modal-mask" data-act="close-role"></div>
+        <div class="modal-body role-modal">
+          <div class="modal-head">
+            <h3 id="roleModalTitle">${t('role.modal.add')}</h3>
+            <button class="modal-close" data-act="close-role">✕</button>
+          </div>
+          <div class="modal-content">
+            <div class="form-grid">
+              <div class="form-line">
+                <label>${t('role.field.codeLabel')} <span class="required">*</span></label>
+                <input type="text" id="fCode" placeholder="${t('role.field.codePlaceholder')}" maxlength="20" />
+              </div>
+              <div class="form-line">
+                <label>${t('sysUser.field.statusLabel')}</label>
+                <select id="fStatus">
+                  <option value="1" selected>${t('common.statusEnabled')}</option>
+                  <option value="0">${t('common.statusDisabled')}</option>
+                </select>
+              </div>
+              <div class="form-line">
+                <label>${t('role.field.nameZhLabel')} <span class="required">*</span></label>
+                <input type="text" id="fNameZh" placeholder="${t('role.field.nameZhLabel')}" maxlength="20" />
+              </div>
+              <div class="form-line">
+                <label>${t('role.field.nameEnLabel')} <span class="required">*</span></label>
+                <input type="text" id="fNameEn" placeholder="${t('role.field.nameEnLabel')}" maxlength="40" />
+              </div>
+              <div class="form-line full">
+                <label>${t('role.field.descLabel')}</label>
+                <input type="text" id="fDescZh" placeholder="中文描述" maxlength="80" />
+              </div>
+              <div class="form-line full">
+                <label>${t('role.field.descLabel')} (EN)</label>
+                <input type="text" id="fDescEn" placeholder="English description" maxlength="120" />
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-role">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnSaveRole">${t('common.save')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 权限配置弹窗 -->
+      <div class="modal" id="permModal">
+        <div class="modal-mask" data-act="close-perm"></div>
+        <div class="modal-body perm-modal">
+          <div class="modal-head">
+            <h3 id="permModalTitle"></h3>
+            <button class="modal-close" data-act="close-perm">✕</button>
+          </div>
+          <div class="modal-content perm-modal-content">
+            <!-- 同步条 -->
+            <div class="perm-sync-bar">
+              <span class="sync-label">${t('role.perm.currentRole')}：<b id="syncCurrentName"></b></span>
+              <span class="sync-divider"></span>
+              <span class="sync-label">${t('role.perm.syncFrom')}</span>
+              <select id="syncSourceRole" class="sync-select">
+                <option value="">${t('role.perm.syncPick')}</option>
+              </select>
+              <span class="sync-label">${t('role.perm.syncMid')}</span>
+              <label class="perm-pill perm-pill-sync"><input type="checkbox" id="syncProjects" /><span>${t('role.perm.syncProjects')}</span></label>
+              <label class="perm-pill perm-pill-sync"><input type="checkbox" id="syncRegions" /><span>${t('role.perm.syncRegions')}</span></label>
+              <label class="perm-pill perm-pill-sync"><input type="checkbox" id="syncMenus" /><span>${t('role.perm.syncMenus')}</span></label>
+              <button class="perm-mini-btn primary" id="btnSync">${t('role.perm.syncBtn')} →</button>
+            </div>
+
+            <!-- 项目权限 -->
+            <div class="perm-block">
+              <div class="perm-block-head">
+                <span class="perm-block-title">${t('role.perm.section.projects')}</span>
+                <span class="perm-block-count" id="cntProjects"></span>
+              </div>
+              <div class="perm-block-body" id="projectsArea"></div>
+            </div>
+
+            <!-- 地区权限 -->
+            <div class="perm-block">
+              <div class="perm-block-head">
+                <span class="perm-block-title">${t('role.perm.section.regions')}</span>
+                <span class="perm-block-count" id="cntRegions"></span>
+              </div>
+              <div class="perm-block-body" id="regionsArea"></div>
+            </div>
+
+            <!-- 菜单 + 操作 -->
+            <div class="perm-block">
+              <div class="perm-block-head">
+                <span class="perm-block-title">${t('role.perm.section.menus')}</span>
+                <span class="perm-block-count" id="cntMenus"></span>
+              </div>
+              <div class="perm-menu-layout">
+                <div class="perm-menu-tree-wrap" id="menuTreeArea"></div>
+                <div class="perm-menu-detail" id="menuDetailArea"></div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-perm">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnSavePerm">${t('common.save')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    /* ============== 弹窗工具 ============== */
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    function openRoleModal(role) {
+      editingId = role ? role.id : null;
+      document.getElementById('roleModalTitle').textContent = role ? t('role.modal.edit') : t('role.modal.add');
+      document.getElementById('fCode').value     = role ? role.code : '';
+      document.getElementById('fNameZh').value   = role ? role.nameZh : '';
+      document.getElementById('fNameEn').value   = role ? role.nameEn : '';
+      document.getElementById('fDescZh').value   = role ? role.descZh : '';
+      document.getElementById('fDescEn').value   = role ? role.descEn : '';
+      document.getElementById('fStatus').value   = role ? String(role.status) : '1';
+      document.getElementById('fCode').disabled  = !!role; // 编辑时编码不可改
+      openModal('roleModal');
+    }
+
+    function openPermModal(role) {
+      permEditingId = role.id;
+      const src = role.permissions || {};
+      // 展开 menus = '*' 为具体 keys
+      let menus = src.menus;
+      if (menus === '*') {
+        menus = {};
+        PERM_MODULES.forEach(m => m.items.forEach(it => it.actions.forEach(act => {
+          menus[`${it.key}.${act}`] = 1;
+        })));
+      } else {
+        menus = Object.assign({}, menus || {});
+      }
+      permDraft = {
+        projects: Array.isArray(src.projects) ? src.projects.slice() : [],
+        regions: src.regions === '*' ? '*' : (Array.isArray(src.regions) ? src.regions.slice() : []),
+        menus: menus,
+        selectedMenuKey: PERM_MODULES[0].items[0].key,  // 默认选中第一个
+      };
+
+      const lang = getLang();
+      document.getElementById('permModalTitle').textContent =
+        t('role.modal.perm', { n: lang === 'en' ? role.nameEn : role.nameZh });
+      document.getElementById('syncCurrentName').textContent =
+        lang === 'en' ? role.nameEn : role.nameZh;
+
+      // 同步源 select：排除自己
+      const opts = [`<option value="">${t('role.perm.syncPick')}</option>`].concat(
+        ROLES.filter(r => r.id !== role.id).map(r =>
+          `<option value="${r.id}">${lang === 'en' ? r.nameEn : r.nameZh}</option>`
+        )
+      );
+      document.getElementById('syncSourceRole').innerHTML = opts.join('');
+      // 重置同步勾选
+      ['syncProjects', 'syncRegions', 'syncMenus'].forEach(id => {
+        document.getElementById(id).checked = false;
+      });
+
+      renderPermArea();
+      openModal('permModal');
+    }
+
+    function renderPermArea() {
+      document.getElementById('projectsArea').innerHTML = renderProjects();
+      document.getElementById('regionsArea').innerHTML  = renderRegions();
+      document.getElementById('menuTreeArea').innerHTML = renderMenuTree();
+      document.getElementById('menuDetailArea').innerHTML = renderMenuDetail();
+
+      const c = totalCount();
+      document.getElementById('cntProjects').textContent =
+        t('role.perm.summary', { n: c.projects });
+      document.getElementById('cntRegions').textContent =
+        permDraft.regions === '*'
+          ? t('role.perm.summary', { n: REGIONS.length }) + ' (*)'
+          : t('role.perm.summary', { n: c.regions });
+      document.getElementById('cntMenus').textContent =
+        t('role.perm.summary', { n: c.menus });
+
+      bindPermEvents();
+    }
+
+    function bindPermEvents() {
+      // 项目 checkbox
+      document.querySelectorAll('[data-proj]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const k = cb.dataset.proj;
+          permDraft.projects = (permDraft.projects || []).filter(x => x !== k);
+          if (cb.checked) permDraft.projects.push(k);
+          renderPermArea();
+        });
+      });
+      // 地区 全选
+      const regionAll = document.getElementById('regionSelectAll');
+      if (regionAll) {
+        regionAll.addEventListener('change', () => {
+          permDraft.regions = regionAll.checked ? REGIONS.map(r => r.code) : [];
+          renderPermArea();
+        });
+      }
+      // 单个地区
+      document.querySelectorAll('[data-region]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const code = cb.dataset.region;
+          let cur = permDraft.regions === '*' ? REGIONS.map(r => r.code) : (permDraft.regions || []).slice();
+          cur = cur.filter(x => x !== code);
+          if (cb.checked) cur.push(code);
+          permDraft.regions = cur;
+          renderPermArea();
+        });
+      });
+
+      // 菜单树：点击行选中（不点 checkbox）
+      document.querySelectorAll('[data-select-menu]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          if (e.target.tagName === 'INPUT') return; // 让 checkbox 处理自己
+          permDraft.selectedMenuKey = el.dataset.selectMenu;
+          renderPermArea();
+        });
+      });
+      // 菜单 checkbox：勾选 = 给该菜单的所有 action 打钩
+      document.querySelectorAll('[data-menu-toggle]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const key = cb.dataset.menuToggle;
+          let target = null;
+          PERM_MODULES.some(m => {
+            const f = m.items.find(it => it.key === key);
+            if (f) { target = f; return true; }
+          });
+          if (!target) return;
+          target.actions.forEach(act => {
+            permDraft.menus[`${key}.${act}`] = cb.checked ? 1 : 0;
+          });
+          renderPermArea();
+        });
+      });
+
+      // 详情区：全选当前菜单
+      const detailAll = document.getElementById('detailSelectAll');
+      if (detailAll) {
+        detailAll.addEventListener('change', () => {
+          const key = permDraft.selectedMenuKey;
+          let target = null;
+          PERM_MODULES.some(m => {
+            const f = m.items.find(it => it.key === key);
+            if (f) { target = f; return true; }
+          });
+          if (!target) return;
+          target.actions.forEach(act => {
+            permDraft.menus[`${key}.${act}`] = detailAll.checked ? 1 : 0;
+          });
+          renderPermArea();
+        });
+      }
+      // 详情区：单个 action checkbox
+      document.querySelectorAll('[data-action-key]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          permDraft.menus[cb.dataset.actionKey] = cb.checked ? 1 : 0;
+          renderPermArea();
+        });
+      });
+    }
+
+    function refresh() {
+      document.getElementById('tableArea').innerHTML = renderTable();
+      bindRowActions();
+    }
+
+    function bindRowActions() {
+      document.querySelectorAll('#tableArea [data-act][data-id]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const id = parseInt(b.dataset.id, 10);
+          const act = b.dataset.act;
+          const r = ROLES.find((x) => x.id === id);
+          if (!r) return;
+
+          if (act === 'edit') openRoleModal(r);
+          else if (act === 'perm') openPermModal(r);
+          else if (act === 'toggle') {
+            if (r.code === 'admin') return toast(t('toast.cannotDeleteAdmin'), 'danger');
+            r.status = r.status ? 0 : 1;
+            saveRoles(ROLES); refresh();
+            toast(r.status ? t('toast.enabled', { n: r.code }) : t('toast.disabled', { n: r.code }), 'success');
+          }
+          else if (act === 'del') {
+            if (r.code === 'admin') return toast(t('toast.cannotDeleteAdmin'), 'danger');
+            if (r.userCount > 0) return toast(t('role.toast.cannotDelete', { n: r.userCount }), 'danger');
+            if (confirm(t('role.toast.confirmDelete', { n: r.code }))) {
+              ROLES = ROLES.filter((x) => x.id !== id);
+              saveRoles(ROLES); refresh();
+              toast(t('role.toast.deleted'), 'success');
+            }
+          }
+        });
+      });
+    }
+
+    window.onPageReady = function () {
+      refresh();
+
+      // 筛选
+      document.querySelectorAll('.filter-row [data-act]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const act = b.dataset.act;
+          if (act === 'reset') {
+            document.getElementById('kw').value = '';
+            document.getElementById('filterStatus').value = '';
+            toast(t('toast.reset'), 'success');
+          } else if (act === 'search') toast(t('toast.searched'), 'success');
+        });
+      });
+
+      // 新增
+      document.getElementById('btnAdd').addEventListener('click', () => openRoleModal(null));
+
+      // 角色弹窗
+      document.querySelectorAll('[data-act="close-role"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('roleModal'));
+      });
+      document.getElementById('btnSaveRole').addEventListener('click', () => {
+        const code   = document.getElementById('fCode').value.trim();
+        const nameZh = document.getElementById('fNameZh').value.trim();
+        const nameEn = document.getElementById('fNameEn').value.trim();
+        const descZh = document.getElementById('fDescZh').value.trim();
+        const descEn = document.getElementById('fDescEn').value.trim();
+        const status = parseInt(document.getElementById('fStatus').value, 10);
+
+        if (!code) return toast(t('role.val.codeRequired'), 'danger');
+        if (!/^[a-zA-Z0-9_]{3,20}$/.test(code)) return toast(t('role.val.codeFormat'), 'danger');
+        if (!nameZh || !nameEn) return toast(t('role.val.nameRequired'), 'danger');
+
+        if (editingId) {
+          const r = ROLES.find((x) => x.id === editingId);
+          Object.assign(r, { nameZh, nameEn, descZh, descEn, status });
+          toast(t('role.toast.saved'), 'success');
+        } else {
+          if (ROLES.some((x) => x.code === code)) return toast(t('role.val.codeExists', { n: code }), 'danger');
+          ROLES.unshift({
+            id: Date.now(),
+            code, nameZh, nameEn, descZh, descEn, status,
+            userCount: 0,
+            createdAt: new Date().toISOString().slice(0, 10),
+            permissions: {},
+          });
+          toast(t('role.toast.created'), 'success');
+        }
+        saveRoles(ROLES);
+        closeModal('roleModal');
+        refresh();
+      });
+
+      // 权限弹窗 关闭
+      document.querySelectorAll('[data-act="close-perm"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('permModal'));
+      });
+
+      // 同步按钮：从源角色复制
+      document.getElementById('btnSync').addEventListener('click', () => {
+        const sid = parseInt(document.getElementById('syncSourceRole').value, 10);
+        if (!sid) return toast(t('role.toast.syncNeedSource'), 'danger');
+        const src = ROLES.find(r => r.id === sid);
+        if (!src) return;
+
+        const wantP = document.getElementById('syncProjects').checked;
+        const wantR = document.getElementById('syncRegions').checked;
+        const wantM = document.getElementById('syncMenus').checked;
+        if (!wantP && !wantR && !wantM) return toast(t('role.toast.syncNeedParts'), 'danger');
+
+        const lang = getLang();
+        if (wantP) permDraft.projects = Array.isArray(src.permissions.projects) ? src.permissions.projects.slice() : [];
+        if (wantR) permDraft.regions = src.permissions.regions === '*' ? '*' : (Array.isArray(src.permissions.regions) ? src.permissions.regions.slice() : []);
+        if (wantM) {
+          if (src.permissions.menus === '*') {
+            const all = {};
+            PERM_MODULES.forEach(m => m.items.forEach(it => it.actions.forEach(act => { all[`${it.key}.${act}`] = 1; })));
+            permDraft.menus = all;
+          } else {
+            permDraft.menus = Object.assign({}, src.permissions.menus || {});
+          }
+        }
+        const parts = [
+          wantP ? t('role.perm.syncProjects') : null,
+          wantR ? t('role.perm.syncRegions') : null,
+          wantM ? t('role.perm.syncMenus') : null,
+        ].filter(Boolean).join(' / ');
+        renderPermArea();
+        toast(t('role.toast.syncSuccess', { from: lang === 'en' ? src.nameEn : src.nameZh, parts }), 'success');
+      });
+
+      // 保存权限
+      document.getElementById('btnSavePerm').addEventListener('click', () => {
+        const r = ROLES.find((x) => x.id === permEditingId);
+        if (r) {
+          // 清理 menu 中的 0 值
+          const cleanMenus = {};
+          Object.keys(permDraft.menus || {}).forEach((k) => {
+            if (permDraft.menus[k]) cleanMenus[k] = 1;
+          });
+          r.permissions = {
+            projects: (permDraft.projects || []).slice(),
+            regions: permDraft.regions,
+            menus: cleanMenus,
+          };
+          saveRoles(ROLES);
+        }
+        closeModal('permModal');
+        toast(t('role.toast.permSaved'), 'success');
+      });
+
+      // 分页占位
+      document.querySelectorAll('.page-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          if (b.classList.contains('active')) return;
+          toast(t('toast.pagePlaceholder'), 'success');
+        });
+      });
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* 新增按钮 */
+    .btn-add {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 7px 14px; font-size: var(--fs-body);
+      border-radius: 5px; border: none;
+      color: #fff; background: var(--color-primary);
+      cursor: pointer; transition: all 0.15s;
+      font-family: inherit;
+      box-shadow: 0 2px 6px rgba(0,200,150,0.25);
+    }
+    .btn-add:hover { background: var(--color-primary-hover); transform: translateY(-1px); }
+
+    /* 弹窗 */
+    .modal { position: fixed; inset: 0; z-index: 999; display: none; }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      animation: modalIn 0.2s; overflow: hidden;
+      max-height: 90vh;
+      display: flex; flex-direction: column;
+    }
+    .role-modal { width: 600px; max-width: 92vw; }
+    .perm-modal { width: 1000px; max-width: 95vw; }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid #f0f3f7;
+      flex-shrink: 0;
+    }
+    .modal-head h3 {
+      font-size: var(--fs-h2); font-weight: var(--fw-bold);
+      color: var(--color-text);
+    }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted); font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 18px 20px; overflow-y: auto; flex: 1; }
+    .perm-modal-content { padding: 14px 20px 18px; }
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc;
+      flex-shrink: 0;
+    }
+    .modal-foot .btn-outline, .modal-foot .btn-primary {
+      padding: 7px 18px; font-size: var(--fs-body);
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      font-family: inherit; font-weight: var(--fw-medium);
+      border: 1px solid transparent;
+    }
+    .modal-foot .btn-outline { color: var(--color-text); background: #fff; border-color: var(--color-border); }
+    .modal-foot .btn-outline:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .modal-foot .btn-primary { color: #fff; background: var(--color-primary); }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    /* 表单 2 列 */
+    .form-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 14px 16px;
+    }
+    .form-line { display: flex; flex-direction: column; gap: 5px; }
+    .form-line.full { grid-column: 1 / -1; }
+    .form-line label {
+      font-size: var(--fs-body-sm); color: var(--color-text);
+      font-weight: var(--fw-medium);
+    }
+    .required { color: var(--color-danger); margin-left: 2px; }
+    .form-line input, .form-line select {
+      padding: 9px 12px;
+      font-size: var(--fs-body);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      transition: border-color 0.15s;
+      font-family: inherit;
+      background: #fff;
+    }
+    .form-line input:focus, .form-line select:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    .form-line input:disabled {
+      background: #fafbfc; color: var(--color-text-muted); cursor: not-allowed;
+    }
+
+    /* ============== 权限弹窗（新版：同步 / 项目 / 地区 / 菜单+详情）============== */
+    .perm-mini-btn {
+      padding: 5px 14px;
+      font-size: var(--fs-body-sm);
+      border: 1px solid var(--color-border);
+      background: #fff;
+      color: var(--color-text);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .perm-mini-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .perm-mini-btn.primary {
+      background: var(--color-primary); color: #fff; border-color: var(--color-primary);
+    }
+    .perm-mini-btn.primary:hover { background: var(--color-primary-hover); }
+
+    /* 同步条 */
+    .perm-sync-bar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 10px 14px;
+      background: #f8fafc;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      margin-bottom: 14px;
+      font-size: var(--fs-body-sm);
+    }
+    .sync-label { color: var(--color-text-secondary); }
+    .sync-label b { color: var(--color-text); }
+    .sync-divider {
+      width: 1px; height: 16px; background: var(--color-border);
+      margin: 0 4px;
+    }
+    .sync-select {
+      padding: 5px 10px;
+      font-size: var(--fs-body-sm);
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+      background: #fff;
+      font-family: inherit;
+      min-width: 140px;
+    }
+    .sync-select:focus { outline: none; border-color: var(--color-primary); }
+
+    /* 区块 */
+    .perm-block {
+      margin-bottom: 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .perm-block-head {
+      display: flex; align-items: center;
+      padding: 10px 14px;
+      background: #fafbfc;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .perm-block-title {
+      font-size: var(--fs-body);
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+    }
+    .perm-block-count {
+      margin-left: auto;
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+    }
+    .perm-block-body {
+      padding: 12px 14px;
+      display: flex; flex-wrap: wrap; gap: 8px 10px;
+    }
+
+    /* checkbox pill */
+    .perm-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      user-select: none;
+      transition: all 0.15s;
+    }
+    .perm-pill:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+    .perm-pill input {
+      width: 14px; height: 14px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+    }
+    .perm-pill-region {
+      min-width: 110px;
+      font-family: ui-monospace, monospace;
+    }
+    .perm-pill-all {
+      background: rgba(0,200,150,0.08);
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+    .perm-pill-sync { padding: 4px 10px; }
+
+    /* 菜单 + 详情布局 */
+    .perm-menu-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 320px;
+    }
+    .perm-menu-tree-wrap {
+      border-right: 1px solid var(--color-border);
+      max-height: 360px;
+      overflow-y: auto;
+      background: #fdfdfe;
+    }
+    .perm-tree {
+      list-style: none; padding: 8px 0;
+    }
+    .tree-module {
+      margin-bottom: 6px;
+    }
+    .tree-module-name {
+      padding: 6px 14px;
+      font-size: var(--fs-meta);
+      color: var(--color-text-muted);
+      font-weight: var(--fw-semibold);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .tree-module ul { list-style: none; }
+    .tree-menu-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px 8px 22px;
+      cursor: pointer;
+      font-size: var(--fs-body);
+      color: var(--color-text);
+      border-left: 3px solid transparent;
+      transition: all 0.15s;
+    }
+    .tree-menu-item:hover { background: rgba(0,200,150,0.05); }
+    .tree-menu-item.selected {
+      background: rgba(0,200,150,0.1);
+      border-left-color: var(--color-primary);
+      color: var(--color-primary);
+      font-weight: var(--fw-semibold);
+    }
+    .tree-menu-item input {
+      width: 14px; height: 14px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+    }
+    .tree-menu-name { flex: 1; }
+
+    .perm-menu-detail {
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .perm-detail-head {
+      padding: 10px 14px;
+      background: #fff;
+      border-bottom: 1px solid #f0f3f7;
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+    }
+    .perm-detail-path b { color: var(--color-primary); }
+    .perm-detail-body {
+      padding: 14px;
+      display: flex; flex-wrap: wrap; gap: 8px 10px;
+    }
+    .perm-detail-empty {
+      padding: 80px 20px;
+      text-align: center;
+      color: var(--color-text-muted);
+      font-size: var(--fs-meta);
+    }
+  </style>
+</body>
+</html>
