@@ -282,6 +282,8 @@
                   <span class="confirm-target-label">${t('invitedUser.col.userEmail')}：</span>
                   <span class="confirm-target-value" id="pTarget"></span>
                 </div>
+                <!-- 提示：升级成功后默认按 100% 返利给上级，提醒及时通知上级设置分成比例 -->
+                <div class="promote-notice">${t('invitedUser.promote.shareNotice')}</div>
               </div>
             </div>
           </div>
@@ -613,6 +615,21 @@
       font-family: ui-monospace, monospace;
       font-weight: var(--fw-semibold);
       color: var(--color-text);
+    }
+    /* 升级提示：橙色 callout，提醒上级代理及时设置分成 */
+    .promote-notice {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: #fff7ed;
+      border-left: 3px solid #f97316;
+      border-radius: 4px;
+      font-size: var(--fs-meta);
+      color: #9a3412;
+      line-height: 1.6;
+    }
+    .promote-notice b {
+      color: #c2410c;
+      font-weight: var(--fw-semibold);
     }
     .modal-foot {
       padding: 12px 20px;
