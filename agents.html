@@ -112,15 +112,21 @@
     //   1) 精简到 10 条（L1 × 3 + L2 × 4 + L3 × 3）
     //   2) 邮箱与 invited-users.html 的 inviter 字段一一对应，跨页一致
     //   3) 新增 L3 代理 → 操作列可"设置为一级代理"
-    const AGENTS_KEY = 'zb_admin_agents_v10';
+    const AGENTS_KEY = 'zb_admin_agents_v11';
     /* 仅 ZB 业务类型（IB / KOL 已移除）
      * monthCommission / pendingCommission：当月获取 / 待结算 佣金（所有代理都有）
      * monthShare      / pendingShare：     当月获得 / 待结算 分成（L1 + L2 有，L3 没有）
+     *
+     * 测试状态字段：
+     *   - tier === 'test'                            → 已开启（active）
+     *   - tier !== 'test' && 有 lastTestExpire 字段   → 已失效（expired），hover 显示过期时间
+     *   - 否则                                       → 未开始（none）
      */
     const DEFAULT_AGENTS = [
       /* === L1 一级代理（3 条）：无 inviter；从 L2 / L3 链路获得分成 === */
       { id:'A100001', email:'alice@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'app', country:'IN', regTime:'2026-03-15 14:32', userCount:1620, tradeUserCount:512, lots:18560.25, monthCommission:42.80, pendingCommission:12.50, monthShare:128.40, pendingShare:32.10, dept:'sales',  person:'zhangwei' },
-      { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', userCount:320,  tradeUserCount:88,  lots:2105.50,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei' },
+      // A100002 历史上曾被开启过测试，5 月失效（演示"已失效"状态）
+      { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', userCount:320,  tradeUserCount:88,  lots:2105.50,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei', lastTestExpire:'2026-05-15' },
       { id:'A100003', email:'frank@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'h5',  country:'IN', regTime:'2026-05-08 08:50', userCount:180,  tradeUserCount:42,  lots:980.10,   monthCommission:3.20,  pendingCommission:0.90,  monthShare:12.50,  pendingShare:3.40,  dept:'sales',  person:'liuyang' },
 
       /* === L2 二级代理（4 条）：inviter 是 L1；从 L3 链路获得分成 === */
@@ -161,9 +167,9 @@
       const isTest = a.tier === 'test';
       // L1 / test-from-L1 → 测试开关
       if (a.tier === 'L1' || (isTest && a._prevTier === 'L1')) {
-        return `<button class="t-act" data-act="toggle-test">${
-          isTest ? t('agents.btn.disableTest') : t('agents.btn.enableTest')
-        }</button>`;
+        // 测试中：暂时隐藏"关闭测试"按钮（后续再加），仅"开启测试"保留
+        if (isTest) return '<span class="muted">-</span>';
+        return `<button class="t-act" data-act="toggle-test">${t('agents.btn.enableTest')}</button>`;
       }
       // L2 / L3 → 不再提供行内"设置为一级代理"操作，统一走顶部"+ 添加一级代理"入口
       return '<span class="muted">-</span>';
@@ -171,8 +177,37 @@
 
     /* ============== 列定义表（一份配置驱动多个 tab） ============== */
     /* 每列：{ width, header(i18n key), help?(i18n key), align?, render(a) } */
+    /* 测试状态判定：
+     *   active   → 当前 tier === 'test'
+     *   expired  → tier 已恢复但有历史 lastTestExpire（曾开启过、现已结束）
+     *   none     → 从未开启过测试
+     */
+    function testStatusOf(a) {
+      if (a.tier === 'test') return 'active';
+      if (a.lastTestExpire) return 'expired';
+      return 'none';
+    }
+    function renderTestStatus(a) {
+      const s = testStatusOf(a);
+      if (s === 'active') {
+        const tip = t('agents.testStatus.activeTip', { date: a.testExpire || '-' });
+        return `<td class="text-center"><span class="ts-tag ts-active" title="${tip}">${t('agents.testStatus.active')}</span></td>`;
+      }
+      if (s === 'expired') {
+        const tip = t('agents.testStatus.expiredTip', { date: a.lastTestExpire });
+        return `<td class="text-center"><span class="ts-tag ts-expired" title="${tip}">${t('agents.testStatus.expired')}</span></td>`;
+      }
+      return `<td class="text-center"><span class="ts-tag ts-none">${t('agents.testStatus.none')}</span></td>`;
+    }
+
     const C = {
-      tier:           { width: 100, header: 'agents.col.tier',           align: 'center', render: a => `<td class="text-center">${tierTag(a.tier)}</td>` },
+      // 代理等级：测试态（tier='test'）展示其底层等级（_prevTier，通常为 L1），"测试"信息由"测试状态"列单独展示
+      tier:           { width: 100, header: 'agents.col.tier',           align: 'center', render: a => {
+        const displayTier = a.tier === 'test' ? (a._prevTier || 'L1') : a.tier;
+        return `<td class="text-center">${tierTag(displayTier)}</td>`;
+      } },
+      // 测试状态：已开启 / 已失效（hover 显示过期时间）/ 未开始
+      testStatus:     { width: 100, header: 'agents.col.testStatus',     align: 'center', render: renderTestStatus },
       inviter:        { width: 200, header: 'agents.col.inviter',        render: a => `<td class="nowrap" title="${a.inviter}">${a.inviter === '-' ? '<span class="muted">-</span>' : a.inviter}</td>` },
       id:             { width: 100, header: 'agents.col.id',             render: a => `<td class="num">${a.id}</td>` },
       email:          { width: 220, header: 'agents.col.email',          render: a => `<td class="nowrap" title="${a.email}">${a.email}</td>` },
@@ -198,7 +233,7 @@
     /* 各 tab 的列顺序：ZB 含 share / pendingShare；IB / KOL 不含
      * 列排布：当月X 紧贴对应的 待结算X，方便对比 */
     const SCHEMA_BY_TYPE = {
-      ZB:  ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','monthShare','pendingShare','actions'],
+      ZB:  ['tier','testStatus','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','monthShare','pendingShare','actions'],
       IB:  ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
       KOL: ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
     };
@@ -711,6 +746,8 @@
       const isTest = a.tier === 'test';
       if (isTest) {
         const prev = a._prevTier || 'L1';
+        // 关闭测试时：把当前 testExpire 转存为 lastTestExpire，作为"已失效"列的 hover 时间
+        if (a.testExpire) a.lastTestExpire = a.testExpire;
         a.tier = prev;
         delete a._prevTier;
         delete a.testRate;
@@ -725,6 +762,8 @@
         a.tier       = 'test';
         a.testRate   = params.rate;
         a.testExpire = params.expire;
+        // 重新开启测试 → 清除"已失效"标记
+        delete a.lastTestExpire;
         saveAgents(AGENTS); refresh();
         closeModal('testModal');
         toast(t('agents.toast.testEnabledWithParams', {
@@ -899,6 +938,15 @@
     .tier-kol-1 { background: linear-gradient(135deg, #f87171 0%, #dc2626 100%); }
     .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); }
     .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); }
+
+    /* 测试状态 tag：已开启（蓝）/ 已失效（灰）/ 未开始（浅灰描边） */
+    .ts-tag {
+      display: inline-block; padding: 2px 9px; border-radius: 10px;
+      font-size: var(--fs-body-sm); font-weight: var(--fw-semibold);
+    }
+    .ts-active  { background: #dbeafe; color: #1d4ed8; }
+    .ts-expired { background: #e5e7eb; color: #4b5563; cursor: help; }
+    .ts-none    { background: transparent; color: #9ca3af; border: 1px solid #d1d5db; }
 
     .proj-tag {
       display: inline-block; padding: 2px 8px; border-radius: 3px;
