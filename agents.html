@@ -188,6 +188,10 @@
       return 'none';
     }
     function renderTestStatus(a) {
+      // 测试模式仅对 L1 适用：L2 / L3 不展示状态，显示 "-"
+      if (a.tier === 'L2' || a.tier === 'L3') {
+        return '<td class="text-center"><span class="muted">-</span></td>';
+      }
       const s = testStatusOf(a);
       if (s === 'active') {
         const tip = t('agents.testStatus.activeTip', { date: a.testExpire || '-' });
