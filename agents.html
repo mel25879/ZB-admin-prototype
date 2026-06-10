@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.agents.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=10"></script>
+  <script src="assets/js/i18n.js?v=12"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
@@ -117,7 +117,7 @@
      * monthCommission / pendingCommission：当月获取 / 待结算 佣金（所有代理都有）
      * monthShare      / pendingShare：     当月获得 / 待结算 分成（L1 + L2 有，L3 没有）
      *
-     * 测试状态字段：
+     * 试用期状态字段：
      *   - tier === 'test'                            → 已开启（active）
      *   - tier !== 'test' && 有 lastTestExpire 字段   → 已失效（expired），hover 显示过期时间
      *   - 否则                                       → 未开始（none）
@@ -125,7 +125,7 @@
     const DEFAULT_AGENTS = [
       /* === L1 一级代理（3 条）：无 inviter；从 L2 / L3 链路获得分成 === */
       { id:'A100001', email:'alice@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'app', country:'IN', regTime:'2026-03-15 14:32', userCount:1620, tradeUserCount:512, lots:18560.25, monthCommission:42.80, pendingCommission:12.50, monthShare:128.40, pendingShare:32.10, dept:'sales',  person:'zhangwei' },
-      // A100002 历史上曾被开启过测试，5 月失效（演示"已失效"状态）
+      // A100002 历史上曾被开启过试用期，5 月失效（演示"已失效"状态）
       { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', userCount:320,  tradeUserCount:88,  lots:2105.50,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei', lastTestExpire:'2026-05-15' },
       { id:'A100003', email:'frank@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'h5',  country:'IN', regTime:'2026-05-08 08:50', userCount:180,  tradeUserCount:42,  lots:980.10,   monthCommission:3.20,  pendingCommission:0.90,  monthShare:12.50,  pendingShare:3.40,  dept:'sales',  person:'liuyang' },
 
@@ -158,16 +158,16 @@
     function hasShare(a) { return a.type === 'ZB' && (a.tier === 'L1' || a.tier === 'L2'); }
 
     /* ============== 操作列：按代理类型 + 层级渲染 ============== */
-    /*  L1（或从 L1 进入测试态）→ 「开启/关闭测试」
+    /*  L1（或从 L1 进入试用期态）→ 「开启/关闭试用期」
      *  L2 / L3              → 「设置为一级代理」
      *  IB / KOL             → 无操作
      */
     function renderOps(a) {
       if (a.type !== 'ZB') return '<span class="muted">-</span>';
       const isTest = a.tier === 'test';
-      // L1 / test-from-L1 → 测试开关
+      // L1 / test-from-L1 → 试用期开关
       if (a.tier === 'L1' || (isTest && a._prevTier === 'L1')) {
-        // 测试中：暂时隐藏"关闭测试"按钮（后续再加），仅"开启测试"保留
+        // 试用期中：暂时隐藏"关闭试用期"按钮（后续再加），仅"开启试用期"保留
         if (isTest) return '<span class="muted">-</span>';
         return `<button class="t-act" data-act="toggle-test">${t('agents.btn.enableTest')}</button>`;
       }
@@ -177,10 +177,10 @@
 
     /* ============== 列定义表（一份配置驱动多个 tab） ============== */
     /* 每列：{ width, header(i18n key), help?(i18n key), align?, render(a) } */
-    /* 测试状态判定：
+    /* 试用期状态判定：
      *   active   → 当前 tier === 'test'
      *   expired  → tier 已恢复但有历史 lastTestExpire（曾开启过、现已结束）
-     *   none     → 从未开启过测试
+     *   none     → 从未开启过试用期
      */
     function testStatusOf(a) {
       if (a.tier === 'test') return 'active';
@@ -188,7 +188,7 @@
       return 'none';
     }
     function renderTestStatus(a) {
-      // 测试模式仅对 L1 适用：L2 / L3 不展示状态，显示 "-"
+      // 试用期仅对 L1 适用：L2 / L3 不展示状态，显示 "-"
       if (a.tier === 'L2' || a.tier === 'L3') {
         return '<td class="text-center"><span class="muted">-</span></td>';
       }
@@ -205,12 +205,12 @@
     }
 
     const C = {
-      // 代理等级：测试态（tier='test'）展示其底层等级（_prevTier，通常为 L1），"测试"信息由"测试状态"列单独展示
+      // 代理等级：试用期态（tier='test'）展示其底层等级（_prevTier，通常为 L1），"试用期"信息由"试用期状态"列单独展示
       tier:           { width: 100, header: 'agents.col.tier',           align: 'center', render: a => {
         const displayTier = a.tier === 'test' ? (a._prevTier || 'L1') : a.tier;
         return `<td class="text-center">${tierTag(displayTier)}</td>`;
       } },
-      // 测试状态：已开启 / 已失效（hover 显示过期时间）/ 未开始
+      // 试用期状态：已开启 / 已失效（hover 显示过期时间）/ 未开始
       testStatus:     { width: 100, header: 'agents.col.testStatus',     align: 'center', render: renderTestStatus },
       inviter:        { width: 200, header: 'agents.col.inviter',        render: a => `<td class="nowrap" title="${a.inviter}">${a.inviter === '-' ? '<span class="muted">-</span>' : a.inviter}</td>` },
       id:             { width: 100, header: 'agents.col.id',             render: a => `<td class="num">${a.id}</td>` },
@@ -361,7 +361,7 @@
         ${TYPES.map((tp, i) => renderPane(tp, i === 0)).join('')}
       </div>
 
-      <!-- ===== 开启/关闭测试 确认弹窗 ===== -->
+      <!-- ===== 开启/关闭试用期 确认弹窗 ===== -->
       <div class="modal" id="testModal">
         <div class="modal-mask" data-act="close-test"></div>
         <div class="modal-body confirm-modal">
@@ -378,7 +378,7 @@
               </svg>
               <div class="confirm-text">
                 <div class="confirm-title" id="testConfirmMsg"></div>
-                <!-- 自定义测试参数（仅"开启测试"时显示，"关闭测试"时隐藏） -->
+                <!-- 自定义试用期参数（仅"开启试用期"时显示，"关闭试用期"时隐藏） -->
                 <div class="test-params" id="testParams">
                   <div class="test-params-grid">
                     <div class="form-line">
@@ -408,7 +408,7 @@
              - 用户尚不是代理         → 添加为 L1
              - 用户已是 L2 / L3 代理  → 升级为 L1，同时解除原邀请关系（返显原邀请人邮箱）
              - 用户已是 L1 / test     → 提示已是一级代理，不提供确认按钮
-             - 始终可勾选「同时开启测试模式」（非必须） -->
+             - 始终可勾选「同时开启试用期」（非必须） -->
       <div class="modal" id="addL1Modal">
         <div class="modal-mask" data-act="close-add-l1"></div>
         <div class="modal-body small-modal">
@@ -434,12 +434,12 @@
               <!-- 升级场景：橙色警告条 —— "将解除邀请关系" -->
               <div class="l1-sever-warn" id="l1SeverWarn" style="display:none"></div>
 
-              <!-- 同时开启测试模式（可选） —— 已是 L1 / test 时整行隐藏 -->
+              <!-- 同时开启试用期（可选） —— 已是 L1 / test 时整行隐藏 -->
               <label class="checkbox-row" id="l1EnableTestRow" style="display:none">
                 <input type="checkbox" id="l1EnableTest" />
                 <span class="checkbox-label">${t('agents.promoteL1.enableTestLabel')}</span>
               </label>
-              <!-- 勾选后显示测试参数 -->
+              <!-- 勾选后显示试用期参数 -->
               <div class="test-params" id="l1TestParams" style="display:none">
                 <div class="test-params-grid">
                   <div class="form-line">
@@ -472,7 +472,7 @@
        - 用户尚不是代理         → 添加为 L1
        - 用户已是 L2 / L3 代理  → 升级为 L1，并解除原邀请关系（结果卡返显原邀请人邮箱 + 橙色警告）
        - 用户已是 L1 / test     → 提示已是一级代理，不允许重复
-       - 任一场景都可勾选「同时开启测试模式」（非必须） */
+       - 任一场景都可勾选「同时开启试用期」（非必须） */
 
     // 简单的邮箱判断（用于 mock 识别 kw 是邮箱还是 ID）
     const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
@@ -662,7 +662,7 @@
     }
 
     /* ============== 行内操作绑定 ============== */
-    let testEditingId      = null;  // 当前要切换测试状态的代理 ID
+    let testEditingId      = null;  // 当前要切换试用期状态的代理 ID
 
     function bindRowActions() {
       document.querySelectorAll('.biz-table tbody tr').forEach((tr) => {
@@ -673,7 +673,7 @@
             if (!a) return;
             const act = b.dataset.act;
 
-            /* 开启 / 关闭测试模式：打开自定义确认弹窗（替代原生 confirm）*/
+            /* 开启 / 关闭试用期：打开自定义确认弹窗（替代原生 confirm）*/
             if (act === 'toggle-test') {
               openTestConfirm(a);
               return;
@@ -684,9 +684,9 @@
       });
     }
 
-    /* ============== 测试参数 helpers ============== */
-    // 读取并校验测试参数：返回 { rate, expire } 或 null（校验失败）
-    // 业务规则：返佣比例 + 测试到期时间 均为必填
+    /* ============== 试用期参数 helpers ============== */
+    // 读取并校验试用期参数：返回 { rate, expire } 或 null（校验失败）
+    // 业务规则：返佣比例 + 试用期到期时间 均为必填
     function readTestParams(rateInputId, expireInputId) {
       const rateInput   = document.getElementById(rateInputId);
       const expireInput = document.getElementById(expireInputId);
@@ -705,7 +705,7 @@
         rateInput.focus();
         return null;
       }
-      // 必填：测试到期时间
+      // 必填：试用期到期时间
       if (expireRaw === '') {
         toast(t('agents.test.params.expireRequired'), 'danger');
         expireInput.focus();
@@ -713,18 +713,18 @@
       }
       return { rate, expire: expireRaw };
     }
-    // 重置测试参数输入框为空（用户每次打开弹窗必须重新输入）
+    // 重置试用期参数输入框为空（用户每次打开弹窗必须重新输入）
     function resetTestParams(rateInputId, expireInputId) {
       document.getElementById(rateInputId).value   = '';
       document.getElementById(expireInputId).value = '';
     }
 
-    /* ============== 测试模式 二次确认（自定义弹窗） ============== */
+    /* ============== 试用期 二次确认（自定义弹窗） ============== */
     function openTestConfirm(a) {
       testEditingId = a.id;
       const isTest = a.tier === 'test';
       const prev   = a._prevTier || 'L1';
-      // 标题：开启 / 关闭测试
+      // 标题：开启 / 关闭试用期
       document.getElementById('testModalTitle').textContent = isTest
         ? t('agents.btn.disableTest')
         : t('agents.btn.enableTest');
@@ -733,7 +733,7 @@
         ? t('agents.toast.confirmDisableTest', { n: a.email, tier: t('myAgent.tier.' + prev.toLowerCase()) })
         : t('agents.toast.confirmEnableTest', { n: a.email });
       document.getElementById('testConfirmMsg').textContent = msg;
-      // 开启测试时显示参数区；关闭测试时隐藏
+      // 开启试用期时显示参数区；关闭试用期时隐藏
       const params = document.getElementById('testParams');
       if (isTest) {
         params.style.display = 'none';
@@ -750,7 +750,7 @@
       const isTest = a.tier === 'test';
       if (isTest) {
         const prev = a._prevTier || 'L1';
-        // 关闭测试时：把当前 testExpire 转存为 lastTestExpire，作为"已失效"列的 hover 时间
+        // 关闭试用期时：把当前 testExpire 转存为 lastTestExpire，作为"已失效"列的 hover 时间
         if (a.testExpire) a.lastTestExpire = a.testExpire;
         a.tier = prev;
         delete a._prevTier;
@@ -766,7 +766,7 @@
         a.tier       = 'test';
         a.testRate   = params.rate;
         a.testExpire = params.expire;
-        // 重新开启测试 → 清除"已失效"标记
+        // 重新开启试用期 → 清除"已失效"标记
         delete a.lastTestExpire;
         saveAgents(AGENTS); refresh();
         closeModal('testModal');
@@ -779,7 +779,7 @@
     /* 当前激活的业务类型 tab */
     let currentType = 'ZB';
 
-    /* 每次数据变化（开启测试 / 改绑管理员）：刷新所有 3 个 tab 的表格 + 分页 + 条数 */
+    /* 每次数据变化（开启试用期 / 改绑管理员）：刷新所有 3 个 tab 的表格 + 分页 + 条数 */
     function refresh() {
       TYPES.forEach(tp => {
         const data = AGENTS.filter(a => a.type === tp);
@@ -880,7 +880,7 @@
         toast(t('toast.pagePlaceholder'), 'success');
       });
 
-      /* === 测试模式 二次确认弹窗：关闭 + 确认 === */
+      /* === 试用期 二次确认弹窗：关闭 + 确认 === */
       document.querySelectorAll('[data-act="close-test"]').forEach((el) => {
         el.addEventListener('click', () => closeModal('testModal'));
       });
@@ -901,7 +901,7 @@
       document.getElementById('l1Search').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); doL1Search(); }
       });
-      /* 测试模式复选框联动：勾选 → 展开参数区；取消勾选 → 收起并清空 */
+      /* 试用期复选框联动：勾选 → 展开参数区；取消勾选 → 收起并清空 */
       document.getElementById('l1EnableTest').addEventListener('change', (e) => {
         const params = document.getElementById('l1TestParams');
         if (e.target.checked) {
@@ -943,7 +943,7 @@
     .tier-kol-2 { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); }
     .tier-kol-3 { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); }
 
-    /* 测试状态 tag：已开启（蓝）/ 已失效（灰）/ 未开始（浅灰描边） */
+    /* 试用期状态 tag：已开启（蓝）/ 已失效（灰）/ 未开始（浅灰描边） */
     .ts-tag {
       display: inline-block; padding: 2px 9px; border-radius: 10px;
       font-size: var(--fs-body-sm); font-weight: var(--fw-semibold);
@@ -1067,7 +1067,7 @@
       box-shadow: 0 4px 10px rgba(0, 200, 150, 0.35);
     }
 
-    /* 开启/关闭测试 确认弹窗（紧凑式） */
+    /* 开启/关闭试用期 确认弹窗（紧凑式） */
     .confirm-modal { width: 460px; max-width: 92vw; }
     .confirm-body {
       display: flex; gap: 14px; align-items: flex-start;
@@ -1100,7 +1100,7 @@
       color: var(--color-text);
     }
 
-    /* —— 测试参数自定义（开启测试 / 设置为一级代理 + 测试 共用） —— */
+    /* —— 试用期参数自定义（开启试用期 / 设置为一级代理 + 试用期 共用） —— */
     .test-params {
       margin-top: 14px;
       padding: 12px 14px;

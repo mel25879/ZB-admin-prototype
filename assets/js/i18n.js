@@ -375,11 +375,11 @@ const I18N = {
     /* 表头 */
     'agents.col.type': '代理类型',
     'agents.col.tier': '代理等级',
-    'agents.col.testStatus': '测试状态',
+    'agents.col.testStatus': '试用期状态',
     'agents.testStatus.active':       '已开启',
     'agents.testStatus.expired':      '已失效',
-    'agents.testStatus.none':         '未开始',
-    'agents.testStatus.activeTip':    '测试中，到期时间：{date}',
+    'agents.testStatus.none':         '未开启',
+    'agents.testStatus.activeTip':    '试用期中，到期时间：{date}',
     'agents.testStatus.expiredTip':   '已于 {date} 失效',
     'agents.col.inviter': '邀请人(邮箱)',
     'agents.col.id': '代理ID',
@@ -462,23 +462,23 @@ const I18N = {
     'agents.detail.none':            '无',
 
     /* 操作按钮 */
-    'agents.btn.enableTest':  '开启测试',
-    'agents.btn.disableTest': '关闭测试',
+    'agents.btn.enableTest':  '开启试用期',
+    'agents.btn.disableTest': '关闭试用期',
     'agents.btn.bindAdmin':   '绑定其他管理员',
     /* ── 设置为一级代理（针对 L2 / L3 代理升级） ── */
     'agents.btn.promoteToL1':            '设置为一级代理',
     'agents.modal.promoteToL1':          '设置为一级代理',
     'agents.promoteL1.warning':          '成为一级代理将<b>切断与上级代理的邀请关系</b>',
-    'agents.promoteL1.enableTestLabel':  '同时开启测试模式',
+    'agents.promoteL1.enableTestLabel':  '同时开启试用期',
     'agents.promoteL1.toast.done':       '已将「{n}」设置为一级代理',
-    'agents.promoteL1.toast.doneWithTest':'已将「{n}」设置为一级代理并开启测试（返佣比例 {rate}%，到期 {expire}）',
-    /* ── 测试参数自定义（开启测试 / 设置为一级代理 + 测试 共用） ── */
+    'agents.promoteL1.toast.doneWithTest':'已将「{n}」设置为一级代理并开启试用期（返佣比例 {rate}%，到期 {expire}）',
+    /* ── 试用期参数自定义（开启试用期 / 设置为一级代理 + 试用期 共用） ── */
     'agents.test.params.rateLabel':      '返佣比例 (%)',
-    'agents.test.params.expireLabel':    '测试到期时间',
+    'agents.test.params.expireLabel':    '试用到期时间',
     'agents.test.params.rateRequired':   '请输入返佣比例',
-    'agents.test.params.expireRequired': '请选择测试到期时间',
+    'agents.test.params.expireRequired': '请选择试用到期时间',
     'agents.test.params.rateInvalid':    '返佣比例需为 0-100 之间的整数',
-    'agents.toast.testEnabledWithParams':'已开启代理「{n}」的测试模式（返佣比例 {rate}%，到期 {expire}）',
+    'agents.toast.testEnabledWithParams':'已开启代理「{n}」的试用期（返佣比例 {rate}%，到期 {expire}）',
     /* ── 添加一级代理（管理员手动添加） ── */
     'agents.btn.addL1':              '+ 添加一级代理',
     'agents.addL1.modal':            '添加一级代理',
@@ -498,7 +498,7 @@ const I18N = {
     'agents.addL1.user.regTime':     '注册时间',
     'agents.addL1.user.country':     '地区',
     'agents.addL1.toast.added':         '已将「{n}」添加为一级代理',
-    'agents.addL1.toast.addedWithTest': '已将「{n}」添加为一级代理并开启测试（返佣比例 {rate}%，到期 {expire}）',
+    'agents.addL1.toast.addedWithTest': '已将「{n}」添加为一级代理并开启试用期（返佣比例 {rate}%，到期 {expire}）',
 
     /* 改绑管理员弹窗 */
     'agents.modal.bindAdmin':            '绑定其他管理员',
@@ -513,10 +513,10 @@ const I18N = {
     'agents.val.newAdminRequired':       '请选择新管理员',
     'agents.val.newAdminSame':           '新管理员与当前管理员相同',
     'agents.val.reasonRequired':         '请填写原因',
-    'agents.toast.confirmEnableTest':    '确定将代理「{n}」开启测试模式？',
-    'agents.toast.confirmDisableTest':   '确定关闭代理「{n}」的测试模式？层级将恢复为 {tier}。',
-    'agents.toast.testEnabled':          '已开启代理「{n}」的测试模式',
-    'agents.toast.testDisabled':         '已关闭代理「{n}」的测试模式，层级恢复为 {tier}',
+    'agents.toast.confirmEnableTest':    '确定将代理「{n}」开启试用期？',
+    'agents.toast.confirmDisableTest':   '确定关闭代理「{n}」的试用期？层级将恢复为 {tier}。',
+    'agents.toast.testEnabled':          '已开启代理「{n}」的试用期',
+    'agents.toast.testDisabled':         '已关闭代理「{n}」的试用期，层级恢复为 {tier}',
     'agents.toast.adminBound':           '已将「{n}」改绑至 {admin}',
 
     /* ============== 代理邀请用户 ============== */
@@ -975,11 +975,11 @@ const I18N = {
 
     'agents.col.type': 'Type',
     'agents.col.tier': 'Tier',
-    'agents.col.testStatus': 'Test Status',
+    'agents.col.testStatus': 'Trial Status',
     'agents.testStatus.active':       'Active',
     'agents.testStatus.expired':      'Expired',
-    'agents.testStatus.none':         'Not Started',
-    'agents.testStatus.activeTip':    'In test, expires on {date}',
+    'agents.testStatus.none':         'Not Enabled',
+    'agents.testStatus.activeTip':    'In trial, expires on {date}',
     'agents.testStatus.expiredTip':   'Expired on {date}',
     'agents.col.inviter': 'Inviter (email)',
     'agents.col.id': 'Agent ID',
@@ -1056,23 +1056,23 @@ const I18N = {
     'agents.detail.person':          'Owner',
     'agents.detail.none':            'None',
 
-    'agents.btn.enableTest':  'Enable Test',
-    'agents.btn.disableTest': 'Disable Test',
+    'agents.btn.enableTest':  'Enable Trial',
+    'agents.btn.disableTest': 'End Trial',
     'agents.btn.bindAdmin':   'Reassign Owner',
     /* ── Set as L1 Agent (promote L2 / L3) ── */
     'agents.btn.promoteToL1':            'Set as L1 Agent',
     'agents.modal.promoteToL1':          'Set as L1 Agent',
     'agents.promoteL1.warning':          'Becoming an L1 Agent will <b>sever the invitation relationship with the parent agent</b>',
-    'agents.promoteL1.enableTestLabel':  'Enable test mode at the same time',
+    'agents.promoteL1.enableTestLabel':  'Start trial period at the same time',
     'agents.promoteL1.toast.done':       '"{n}" has been set as L1 Agent',
-    'agents.promoteL1.toast.doneWithTest':'"{n}" has been set as L1 Agent with test mode enabled (rate {rate}%, expires {expire})',
-    /* ── Test parameters (shared: enable test / set as L1 + test) ── */
+    'agents.promoteL1.toast.doneWithTest':'"{n}" has been set as L1 Agent with trial enabled (rate {rate}%, expires {expire})',
+    /* ── Trial parameters (shared: enable trial / set as L1 + trial) ── */
     'agents.test.params.rateLabel':      'Commission Rate (%)',
-    'agents.test.params.expireLabel':    'Test Expiry',
+    'agents.test.params.expireLabel':    'Trial Expiry',
     'agents.test.params.rateRequired':   'Please enter the commission rate',
-    'agents.test.params.expireRequired': 'Please select the test expiry date',
+    'agents.test.params.expireRequired': 'Please select the trial expiry date',
     'agents.test.params.rateInvalid':    'Commission rate must be an integer between 0 and 100',
-    'agents.toast.testEnabledWithParams':'Test mode enabled for "{n}" (rate {rate}%, expires {expire})',
+    'agents.toast.testEnabledWithParams':'Trial enabled for "{n}" (rate {rate}%, expires {expire})',
     /* ── Add L1 Agent (manually by admin) ── */
     'agents.btn.addL1':              '+ Add L1 Agent',
     'agents.addL1.modal':            'Add L1 Agent',
@@ -1092,7 +1092,7 @@ const I18N = {
     'agents.addL1.user.regTime':     'Reg. Time',
     'agents.addL1.user.country':     'Region',
     'agents.addL1.toast.added':         '"{n}" has been added as L1 agent',
-    'agents.addL1.toast.addedWithTest': '"{n}" has been added as L1 agent with test mode enabled (rate {rate}%, expires {expire})',
+    'agents.addL1.toast.addedWithTest': '"{n}" has been added as L1 agent with trial enabled (rate {rate}%, expires {expire})',
 
     'agents.modal.bindAdmin':            'Reassign Owner',
     'agents.bindField.target':           'Target Agent',
@@ -1105,10 +1105,10 @@ const I18N = {
     'agents.val.newAdminRequired':       'Please select a new owner',
     'agents.val.newAdminSame':           'New owner is the same as the current one',
     'agents.val.reasonRequired':         'Please enter the reason',
-    'agents.toast.confirmEnableTest':    'Enable test mode for "{n}"?',
-    'agents.toast.confirmDisableTest':   'Disable test mode for "{n}"? The tier will be restored to {tier}.',
-    'agents.toast.testEnabled':          'Test mode enabled for "{n}"',
-    'agents.toast.testDisabled':         'Test mode disabled for "{n}". Tier restored to {tier}',
+    'agents.toast.confirmEnableTest':    'Start trial for "{n}"?',
+    'agents.toast.confirmDisableTest':   'End trial for "{n}"? The tier will be restored to {tier}.',
+    'agents.toast.testEnabled':          'Trial enabled for "{n}"',
+    'agents.toast.testDisabled':         'Trial ended for "{n}". Tier restored to {tier}',
     'agents.toast.adminBound':           'Agent "{n}" reassigned to {admin}',
 
     /* ============== Invited Users ============== */
