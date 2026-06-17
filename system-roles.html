@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.system-roles.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=12"></script>
+  <script src="assets/js/i18n.js?v=15"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     /* 登录守卫 */
@@ -70,11 +70,22 @@
     ];
 
     /* ============== Mock 数据 ============== */
-    const ROLES_KEY = 'zb_admin_roles_v1';
+    /* v2：引入父子角色关系（parentId）
+     *   - parentId 为 null → 顶级根角色
+     *   - parentId 为某角色 id → 该角色的父级
+     *   预置层级结构示例：
+     *     admin (顶级)
+     *       ├─ ops (上级: admin)
+     *       │    └─ cs (上级: ops)
+     *       ├─ risk (上级: admin)
+     *       └─ fin (上级: admin)
+     */
+    const ROLES_KEY = 'zb_admin_roles_v2';
     const DEFAULT_ROLES = [
       {
         id: 1, code: 'admin', nameZh: '超级管理员', nameEn: 'Super Admin',
         descZh: '拥有全部权限', descEn: 'Full permissions',
+        parentId: null,
         userCount: 1, createdAt: '2026-04-01', status: 1,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -85,6 +96,7 @@
       {
         id: 2, code: 'ops', nameZh: '运营', nameEn: 'Operations',
         descZh: '运营日常管理', descEn: 'Daily operations',
+        parentId: 1,
         userCount: 2, createdAt: '2026-04-12', status: 1,
         permissions: {
           projects: ['dana', 'tradewill'],
@@ -95,6 +107,7 @@
       {
         id: 3, code: 'cs', nameZh: '客服', nameEn: 'Customer Service',
         descZh: '处理用户咨询', descEn: 'User support',
+        parentId: 2,
         userCount: 1, createdAt: '2026-04-20', status: 1,
         permissions: {
           projects: ['dana'],
@@ -105,6 +118,7 @@
       {
         id: 4, code: 'risk', nameZh: '风控', nameEn: 'Risk Control',
         descZh: '审核与风险管控', descEn: 'Audit & risk',
+        parentId: 1,
         userCount: 1, createdAt: '2026-05-01', status: 1,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -115,6 +129,7 @@
       {
         id: 5, code: 'fin', nameZh: '财务', nameEn: 'Finance',
         descZh: '资金审核与对账', descEn: 'Finance audit',
+        parentId: 1,
         userCount: 1, createdAt: '2026-05-10', status: 0,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -140,6 +155,52 @@
     // 草稿格式：{ projects: ['dana',...], regions: ['+86',...]|'*', menus: {'k.action':1}|'*', selectedMenuKey: 'invited-users' }
     let permDraft = { projects: [], regions: [], menus: {}, selectedMenuKey: null };
 
+    /* ============== 父子角色关系 API ==============
+     * 业务侧通过下面 4 个 helper 进行父子关系查询与判断：
+     *   getRoleById(id)              → 按 id 查角色
+     *   getDirectChildRoles(parentId)→ 直接子角色（一层）
+     *   getAllDescendantRoles(rootId)→ 所有子孙角色（递归全部下级）
+     *   isAncestorOf(maybeAnc, target)→ 判断 maybeAnc 是否是 target 的祖先
+     */
+    function getRoleById(id) {
+      return ROLES.find((r) => r.id === id);
+    }
+    function getDirectChildRoles(parentId) {
+      return ROLES.filter((r) => r.parentId === parentId);
+    }
+    function getAllDescendantRoles(rootId) {
+      const result = [];
+      const stack = [rootId];
+      while (stack.length) {
+        const cur = stack.pop();
+        const children = getDirectChildRoles(cur);
+        children.forEach((c) => { result.push(c); stack.push(c.id); });
+      }
+      return result;
+    }
+    function isAncestorOf(maybeAncestorId, targetId) {
+      let cur = getRoleById(targetId);
+      while (cur && cur.parentId !== null && cur.parentId !== undefined) {
+        if (cur.parentId === maybeAncestorId) return true;
+        cur = getRoleById(cur.parentId);
+      }
+      return false;
+    }
+    /* 渲染辅助：拿到父角色的显示名（按当前语言） */
+    function getParentDisplayName(role) {
+      if (!role || role.parentId === null || role.parentId === undefined) return '';
+      const p = getRoleById(role.parentId);
+      if (!p) return '';
+      return getLang() === 'en' ? p.nameEn : p.nameZh;
+    }
+    /* 拿所有根级角色（无父级，或父级已被删除的"孤儿"也视为根）*/
+    function getRootRoles() {
+      return ROLES.filter((r) => {
+        if (r.parentId === null || r.parentId === undefined) return true;
+        return !getRoleById(r.parentId);  // 孤儿
+      });
+    }
+
     /* ============== 渲染表格 ============== */
     function renderTable() {
       const lang = getLang();
@@ -147,12 +208,13 @@
         <div class="table-wrap">
           <table class="data-table biz-table">
             <colgroup>
+              <col style="width:11%">
               <col style="width:13%">
-              <col style="width:15%">
-              <col style="width:22%">
-              <col style="width:10%">
+              <col style="width:18%">
               <col style="width:12%">
               <col style="width:8%">
+              <col style="width:11%">
+              <col style="width:7%">
               <col style="width:20%">
             </colgroup>
             <thead>
@@ -160,6 +222,7 @@
                 <th>${t('role.col.code')}</th>
                 <th>${t('role.col.name')}</th>
                 <th>${t('role.col.desc')}</th>
+                <th>${t('role.col.parent')}</th>
                 <th class="text-center">${t('role.col.userCount')}</th>
                 <th>${t('role.col.created')}</th>
                 <th class="text-center">${t('role.col.status')}</th>
@@ -167,11 +230,16 @@
               </tr>
             </thead>
             <tbody>
-              ${ROLES.length ? ROLES.map((r) => `
+              ${ROLES.length ? ROLES.map((r) => {
+                const parentName = getParentDisplayName(r);
+                return `
                 <tr data-id="${r.id}">
                   <td class="mono"><b>${r.code}</b></td>
                   <td><b>${lang === 'en' ? r.nameEn : r.nameZh}</b></td>
                   <td class="muted">${lang === 'en' ? r.descEn : r.descZh}</td>
+                  <td>${parentName
+                    ? `<span class="parent-tag">${parentName}</span>`
+                    : `<span class="muted">${t('role.parent.topLevel')}</span>`}</td>
                   <td class="text-center"><b class="num">${r.userCount}</b></td>
                   <td class="muted">${r.createdAt}</td>
                   <td class="text-center">
@@ -186,7 +254,7 @@
                     <button class="t-act t-del" data-act="del" data-id="${r.id}">${t('common.delete')}</button>
                   </td>
                 </tr>
-              `).join('') : emptyRow(7)}
+              `;}).join('') : emptyRow(8)}
             </tbody>
           </table>
         </div>
@@ -364,6 +432,16 @@
           <div class="filter-actions">
             <button class="btn-reset" data-act="reset">${t('common.reset')}</button>
             <button class="btn-query" data-act="search">${t('common.search')}</button>
+            <button class="btn-tree" id="btnTree" type="button" title="${t('role.btnTree')}">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="6" height="6" rx="1"/>
+                <rect x="15" y="3" width="6" height="6" rx="1"/>
+                <rect x="3" y="15" width="6" height="6" rx="1"/>
+                <rect x="15" y="15" width="6" height="6" rx="1"/>
+                <path d="M9 6h6 M6 9v6 M18 9v6 M9 18h6"/>
+              </svg>
+              ${t('role.btnTree')}
+            </button>
             <button class="btn-add" id="btnAdd">
               <svg viewBox="0 0 24 24" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
               ${t('role.btnAdd')}
@@ -403,6 +481,11 @@
               <div class="form-line">
                 <label>${t('role.field.nameEnLabel')} <span class="required">*</span></label>
                 <input type="text" id="fNameEn" placeholder="${t('role.field.nameEnLabel')}" maxlength="40" />
+              </div>
+              <div class="form-line full">
+                <label>${t('role.field.parentLabel')}</label>
+                <select id="fParent"></select>
+                <p class="form-tip">${t('role.field.parentTip')}</p>
               </div>
               <div class="form-line full">
                 <label>${t('role.field.descLabel')}</label>
@@ -481,6 +564,32 @@
           </div>
         </div>
       </div>
+
+      <!-- 角色架构树 Modal：直观展示所有角色的父子层级 -->
+      <div class="modal" id="treeModal">
+        <div class="modal-mask" data-act="close-tree"></div>
+        <div class="modal-body tree-modal">
+          <div class="modal-head">
+            <h3>${t('role.tree.title')}</h3>
+            <button class="modal-close" data-act="close-tree">✕</button>
+          </div>
+          <div class="modal-content">
+            <!-- 顶部摘要：总角色数 / 顶级角色数 / 最大层级深度 -->
+            <div class="tree-stats" id="treeStats"></div>
+            <!-- 图例 -->
+            <div class="tree-legend">
+              <span class="legend-item"><span class="legend-dot legend-active"></span>${t('common.statusEnabled')}</span>
+              <span class="legend-item"><span class="legend-dot legend-disabled"></span>${t('common.statusDisabled')}</span>
+              <span class="legend-item"><span class="legend-badge">N</span>${t('role.col.userCount')}</span>
+            </div>
+            <!-- 树主体 -->
+            <div class="role-tree-wrap" id="roleTreeWrap"></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-tree">${t('common.close')}</button>
+          </div>
+        </div>
+      </div>
     `;
 
     /* ============== 弹窗工具 ============== */
@@ -497,6 +606,24 @@
       document.getElementById('fDescEn').value   = role ? role.descEn : '';
       document.getElementById('fStatus').value   = role ? String(role.status) : '1';
       document.getElementById('fCode').disabled  = !!role; // 编辑时编码不可改
+
+      // 父级角色下拉：编辑时排除"自己"和"所有后代"，防止循环引用
+      const parentSel = document.getElementById('fParent');
+      const lang = getLang();
+      // 找出当前角色的不可选项 id 集合
+      const excludeIds = new Set();
+      if (role) {
+        excludeIds.add(role.id);
+        getAllDescendantRoles(role.id).forEach((d) => excludeIds.add(d.id));
+      }
+      const opts = [`<option value="">${t('role.parent.topLevel')}</option>`]
+        .concat(ROLES
+          .filter((r) => !excludeIds.has(r.id))
+          .map((r) => `<option value="${r.id}">${lang === 'en' ? r.nameEn : r.nameZh}（${r.code}）</option>`)
+        );
+      parentSel.innerHTML = opts.join('');
+      parentSel.value = role && role.parentId ? String(role.parentId) : '';
+
       openModal('roleModal');
     }
 
@@ -647,6 +774,94 @@
       bindRowActions();
     }
 
+    /* ============== 角色架构图渲染 ==============
+     * 组织架构图风格：横向居中布局 + 矩形卡片 + 折角连接线
+     * - 根节点：绿色顶边 + 浅绿渐变背景
+     * - 普通节点：白底圆角卡片 + 阴影
+     * - 禁用节点：虚线边框 + 半透明
+     * - 卡片包含：状态点 / 角色名 / 代码 badge / 用户数 + 下属数图标
+     */
+    function renderRoleTreeHtml() {
+      const lang = getLang();
+      function renderNode(role) {
+        const name      = lang === 'en' ? role.nameEn : role.nameZh;
+        const isRoot    = role.parentId === null || role.parentId === undefined;
+        const children  = getDirectChildRoles(role.id);
+        const descCount = getAllDescendantRoles(role.id).length;
+        const cls       = [
+          isRoot       ? 'is-root'    : '',
+          !role.status ? 'is-disabled': '',
+        ].filter(Boolean).join(' ');
+
+        const childrenHtml = children.length
+          ? `<ul>${children.map(renderNode).join('')}</ul>`
+          : '';
+        const subordinateBadge = descCount > 0
+          ? `<span class="org-meta-item" title="${t('role.tree.descendants')}">
+               <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                 <path d="M12 4v6M6 14v6M18 14v6M5 14h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                 <circle cx="12" cy="4" r="1.5" fill="currentColor"/>
+                 <circle cx="6"  cy="14" r="1.5" fill="currentColor"/>
+                 <circle cx="18" cy="14" r="1.5" fill="currentColor"/>
+                 <circle cx="6"  cy="20" r="1.5" fill="currentColor"/>
+                 <circle cx="18" cy="20" r="1.5" fill="currentColor"/>
+               </svg>
+               <b>${descCount}</b>
+             </span>`
+          : '';
+
+        return `
+          <li>
+            <div class="org-node ${cls}" data-id="${role.id}" title="${name} · ${role.code}">
+              <span class="org-status-dot ${role.status ? 'active' : 'inactive'}"></span>
+              ${!role.status ? `<span class="org-disabled-tag">${t('common.statusDisabled')}</span>` : ''}
+              <div class="org-node-name">${name}</div>
+              <div class="org-node-code">${role.code}</div>
+              <div class="org-node-meta">
+                <span class="org-meta-item" title="${t('role.col.userCount')}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"/>
+                    <path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  </svg>
+                  <b>${role.userCount}</b>
+                </span>
+                ${subordinateBadge}
+              </div>
+            </div>
+            ${childrenHtml}
+          </li>
+        `;
+      }
+      const roots = getRootRoles();
+      if (!roots.length) return `<div class="muted" style="text-align:center;padding:40px">${t('role.empty')}</div>`;
+      return `<ul class="org-tree">${roots.map(renderNode).join('')}</ul>`;
+    }
+
+    /* 顶部摘要：总数 / 顶级数 / 最大深度 */
+    function computeTreeStats() {
+      const total = ROLES.length;
+      const roots = getRootRoles().length;
+      // 计算最大深度（根算 1 层）
+      function depthOf(id) {
+        const children = getDirectChildRoles(id);
+        if (!children.length) return 1;
+        return 1 + Math.max(...children.map((c) => depthOf(c.id)));
+      }
+      const maxDepth = getRootRoles().reduce((mx, r) => Math.max(mx, depthOf(r.id)), 0);
+      return { total, roots, maxDepth };
+    }
+
+    function openTreeModal() {
+      const stats = computeTreeStats();
+      document.getElementById('treeStats').innerHTML = `
+        <div class="tree-stat-item"><span class="tree-stat-label">${t('role.tree.total')}</span><b class="tree-stat-num">${stats.total}</b></div>
+        <div class="tree-stat-item"><span class="tree-stat-label">${t('role.tree.rootCount')}</span><b class="tree-stat-num">${stats.roots}</b></div>
+        <div class="tree-stat-item"><span class="tree-stat-label">${t('role.tree.maxDepth')}</span><b class="tree-stat-num">${stats.maxDepth}</b></div>
+      `;
+      document.getElementById('roleTreeWrap').innerHTML = renderRoleTreeHtml();
+      openModal('treeModal');
+    }
+
     function bindRowActions() {
       document.querySelectorAll('#tableArea [data-act][data-id]').forEach((b) => {
         b.addEventListener('click', () => {
@@ -666,6 +881,9 @@
           else if (act === 'del') {
             if (r.code === 'admin') return toast(t('toast.cannotDeleteAdmin'), 'danger');
             if (r.userCount > 0) return toast(t('role.toast.cannotDelete', { n: r.userCount }), 'danger');
+            // 父子关系守卫：存在直接子角色 → 禁止删除（避免孤儿）
+            const childCnt = getDirectChildRoles(r.id).length;
+            if (childCnt > 0) return toast(t('role.toast.cannotDeleteHasChildren', { n: childCnt }), 'danger');
             if (confirm(t('role.toast.confirmDelete', { n: r.code }))) {
               ROLES = ROLES.filter((x) => x.id !== id);
               saveRoles(ROLES); refresh();
@@ -694,6 +912,12 @@
       // 新增
       document.getElementById('btnAdd').addEventListener('click', () => openRoleModal(null));
 
+      // 角色架构树
+      document.getElementById('btnTree').addEventListener('click', openTreeModal);
+      document.querySelectorAll('[data-act="close-tree"]').forEach((el) => {
+        el.addEventListener('click', () => closeModal('treeModal'));
+      });
+
       // 角色弹窗
       document.querySelectorAll('[data-act="close-role"]').forEach((el) => {
         el.addEventListener('click', () => closeModal('roleModal'));
@@ -705,20 +929,30 @@
         const descZh = document.getElementById('fDescZh').value.trim();
         const descEn = document.getElementById('fDescEn').value.trim();
         const status = parseInt(document.getElementById('fStatus').value, 10);
+        const parentRaw = document.getElementById('fParent').value;
+        const parentId  = parentRaw ? parseInt(parentRaw, 10) : null;
 
         if (!code) return toast(t('role.val.codeRequired'), 'danger');
         if (!/^[a-zA-Z0-9_]{3,20}$/.test(code)) return toast(t('role.val.codeFormat'), 'danger');
         if (!nameZh || !nameEn) return toast(t('role.val.nameRequired'), 'danger');
 
+        // 防循环：编辑时双保险，确认 parentId 不是自己也不是自己的后代
+        if (editingId && parentId !== null) {
+          if (parentId === editingId || isAncestorOf(editingId, parentId)) {
+            return toast(t('role.val.parentLoop'), 'danger');
+          }
+        }
+
         if (editingId) {
           const r = ROLES.find((x) => x.id === editingId);
-          Object.assign(r, { nameZh, nameEn, descZh, descEn, status });
+          Object.assign(r, { nameZh, nameEn, descZh, descEn, status, parentId });
           toast(t('role.toast.saved'), 'success');
         } else {
           if (ROLES.some((x) => x.code === code)) return toast(t('role.val.codeExists', { n: code }), 'danger');
           ROLES.unshift({
             id: Date.now(),
             code, nameZh, nameEn, descZh, descEn, status,
+            parentId,
             userCount: 0,
             createdAt: new Date().toISOString().slice(0, 10),
             permissions: {},
@@ -898,6 +1132,262 @@
     }
     .form-line input:disabled {
       background: #fafbfc; color: var(--color-text-muted); cursor: not-allowed;
+    }
+    /* 字段下方灰色辅助说明 */
+    .form-tip {
+      margin-top: 4px;
+      font-size: var(--fs-meta);
+      color: var(--color-text-muted);
+      line-height: 1.4;
+    }
+
+    /* 列表「上级角色」列 tag */
+    .parent-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      background: rgba(91, 192, 222, 0.12);
+      color: #2980b9;
+      border-radius: 3px;
+      font-size: var(--fs-body-sm);
+      font-weight: var(--fw-medium);
+    }
+
+    /* ============== 角色架构树按钮 + Modal ============== */
+    .btn-tree {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 6px 14px;
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      background: #fff;
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    .btn-tree:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+
+    .tree-modal {
+      width: 880px; max-width: 94vw;
+      max-height: 86vh;
+      display: flex; flex-direction: column;
+    }
+    .tree-modal .modal-content {
+      flex: 1;
+      overflow: auto;
+    }
+
+    /* 顶部摘要条 */
+    .tree-stats {
+      display: flex; gap: 12px;
+      padding: 10px 14px;
+      background: #f8fafc;
+      border-radius: 6px;
+      margin-bottom: 12px;
+    }
+    .tree-stat-item {
+      flex: 1;
+      display: flex; flex-direction: column; gap: 2px;
+      align-items: center;
+      text-align: center;
+    }
+    .tree-stat-label {
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+    }
+    .tree-stat-num {
+      font-size: 18px;
+      color: var(--color-primary);
+      font-family: ui-monospace, monospace;
+    }
+
+    /* 图例 */
+    .tree-legend {
+      display: flex; gap: 16px; flex-wrap: wrap;
+      padding: 8px 0;
+      margin-bottom: 8px;
+      font-size: var(--fs-meta);
+      color: var(--color-text-secondary);
+      border-bottom: 1px dashed var(--color-border);
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 4px; }
+    .legend-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block;
+    }
+    .legend-active   { background: #00c896; }
+    .legend-disabled { background: #94a3b8; }
+    .legend-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 18px; height: 18px;
+      padding: 0 5px;
+      background: rgba(91,192,222,0.12);
+      color: #2980b9;
+      border-radius: 9px;
+      font-size: 11px;
+      font-family: ui-monospace, monospace;
+    }
+
+    /* ============== 角色架构图（org-chart 风格）==============
+     * 横向居中布局：根节点在顶部中央，子节点对称展开
+     * 节点之间用 CSS ::before/::after 绘制"折角连接线"
+     * 蓝图风格背景：浅绿网格点
+     */
+    .role-tree-wrap {
+      padding: 28px 16px 20px;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(0,200,150,0.10) 1px, transparent 1px) 0 0 / 18px 18px,
+        linear-gradient(180deg, #fafdfb 0%, #ffffff 100%);
+      border-radius: 8px;
+      min-height: 240px;
+      overflow: auto;  /* 节点太多时横向滚动 */
+    }
+
+    /* 主体：嵌套 ul/li 构造的树 */
+    .org-tree, .org-tree ul {
+      position: relative;
+      padding: 0;
+      margin: 0;
+      list-style: none;
+      text-align: center;
+      white-space: nowrap;
+    }
+    /* 子组下方：上方折角连接线（垂直主干）*/
+    .org-tree ul {
+      padding-top: 28px;
+    }
+    .org-tree ul::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 50%;
+      width: 0; height: 28px;
+      border-left: 2px solid #cbd5e1;
+    }
+    .org-tree li {
+      display: inline-block;
+      padding: 28px 14px 0;
+      vertical-align: top;
+      position: relative;
+    }
+    /* 每个子节点：上方左右两段连接线 */
+    .org-tree li::before, .org-tree li::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      width: 50%;
+      height: 28px;
+    }
+    .org-tree li::before { right: 50%; border-top: 2px solid #cbd5e1; }
+    .org-tree li::after  { left:  50%; border-top: 2px solid #cbd5e1; border-left: 2px solid #cbd5e1; }
+    /* 单子节点：无水平段，只画上方一条直线 */
+    .org-tree li:only-child::before,
+    .org-tree li:only-child::after { display: none; }
+    .org-tree li:only-child { padding-top: 28px; }
+    /* 首/末子节点的圆角处理：让线条像 ┌ ┐ */
+    .org-tree li:first-child::before,
+    .org-tree li:last-child::after  { border: 0 none; }
+    .org-tree li:last-child::before {
+      border-right: 2px solid #cbd5e1;
+      border-radius: 0 8px 0 0;
+    }
+    .org-tree li:first-child::after { border-radius: 8px 0 0 0; }
+    /* 根级 li：不需要上方连线 */
+    .org-tree > li { padding-top: 0; }
+    .org-tree > li::before, .org-tree > li::after { display: none; }
+
+    /* ============== 节点卡片 ============== */
+    .org-node {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 14px 18px 12px;
+      background: #fff;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      min-width: 156px;
+      text-align: center;
+      transition: all 0.18s;
+      position: relative;
+      cursor: default;
+    }
+    .org-node:hover {
+      border-color: var(--color-primary);
+      box-shadow: 0 6px 18px rgba(0,200,150,0.18);
+      transform: translateY(-2px);
+    }
+    /* 根节点：绿色顶边 + 浅绿渐变 + 加粗名字 */
+    .org-node.is-root {
+      border-top: 3px solid var(--color-primary);
+      background: linear-gradient(180deg, #ecfaf4 0%, #ffffff 65%);
+      box-shadow: 0 3px 14px rgba(0,200,150,0.18);
+    }
+    .org-node.is-root .org-node-name {
+      color: var(--color-primary);
+      font-size: 15px;
+    }
+    /* 禁用节点：虚线 + 半透明 */
+    .org-node.is-disabled {
+      opacity: 0.7;
+      border-style: dashed;
+    }
+    .org-node.is-disabled .org-node-name { color: var(--color-text-muted); }
+
+    /* 节点右上角：状态点 + 禁用 tag */
+    .org-status-dot {
+      position: absolute;
+      top: 9px; right: 9px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+    .org-status-dot.active   { background: #00c896; box-shadow: 0 0 0 2px rgba(0,200,150,0.18); }
+    .org-status-dot.inactive { background: #94a3b8; box-shadow: 0 0 0 2px rgba(148,163,184,0.18); }
+    .org-disabled-tag {
+      position: absolute;
+      top: 6px; left: 8px;
+      font-size: 10px;
+      padding: 1px 5px;
+      background: #f1f5f9;
+      color: var(--color-text-muted);
+      border-radius: 2px;
+    }
+
+    .org-node-name {
+      font-size: 14px;
+      font-weight: var(--fw-semibold);
+      color: var(--color-text);
+      letter-spacing: 0.2px;
+    }
+    .org-node-code {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--color-text-secondary);
+      padding: 1px 7px;
+      background: #f3f5f8;
+      border-radius: 3px;
+      display: inline-block;
+    }
+    /* 底部 meta：用户数 + 下属数 */
+    .org-node-meta {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--color-text-secondary);
+    }
+    .org-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .org-meta-item b {
+      color: var(--color-text);
+      font-weight: var(--fw-semibold);
+      font-family: ui-monospace, monospace;
     }
 
     /* ============== 权限弹窗（新版：同步 / 项目 / 地区 / 菜单+详情）============== */
