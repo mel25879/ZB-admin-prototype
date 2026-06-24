@@ -29,7 +29,7 @@
     //   ① 我的代理（id=3）→ 禁用
     //   ② 数据报表（id=5）→ 禁用
     //   ③ 代理业绩报表（id=6）→ 禁用
-    const MENUS_KEY = 'zb_admin_menus_v2';
+    const MENUS_KEY = 'zb_admin_menus_v3';
     // 类型：dir(目录) / menu(菜单) / button(按钮)
     const DEFAULT_MENUS = [
       { id: 1,  parentId: 0, nameZh: '用户管理',     nameEn: 'User Management', path: '',                   icon: 'users',  sort: 1, type: 'dir',  permKey: '',                  status: 1 },
@@ -41,7 +41,7 @@
       { id: 7,  parentId: 0, nameZh: '系统用户管理', nameEn: 'System Management', path: '',                 icon: 'gear',   sort: 3, type: 'dir',  permKey: '',                  status: 1 },
       { id: 8,  parentId: 7, nameZh: '系统用户',     nameEn: 'System Users',    path: 'system-users.html',  icon: 'user',   sort: 1, type: 'menu', permKey: 'system:user:list',  status: 1 },
       { id: 9,  parentId: 7, nameZh: '角色管理',     nameEn: 'Roles',           path: 'system-roles.html',  icon: 'shield', sort: 2, type: 'menu', permKey: 'system:role:list',  status: 1 },
-      { id: 10, parentId: 7, nameZh: '菜单管理',     nameEn: 'Menus',           path: 'system-menus.html',  icon: 'menu',   sort: 3, type: 'menu', permKey: 'system:menu:list',  status: 1 },
+      { id: 10, parentId: 7, nameZh: '菜单管理',     nameEn: 'Menus',           path: 'system-menus.html',  icon: 'menu',   sort: 3, type: 'menu', permKey: 'system:menu:list',  status: 0 },
       { id: 11, parentId: 8, nameZh: '新增用户',     nameEn: 'Add User',        path: '',                   icon: '',       sort: 1, type: 'button', permKey: 'system:user:add', status: 1 },
       { id: 12, parentId: 8, nameZh: '删除用户',     nameEn: 'Delete User',     path: '',                   icon: '',       sort: 2, type: 'button', permKey: 'system:user:del', status: 1 },
     ];

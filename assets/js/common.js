@@ -45,7 +45,8 @@ const MENU_CONFIG = [
     children: [
       { id: "system-users", nameKey: "menu.system-users", href: "system-users.html" },
       { id: "system-roles", nameKey: "menu.system-roles", href: "system-roles.html" },
-      { id: "system-menus", nameKey: "menu.system-menus", href: "system-menus.html" },
+      // 菜单管理（暂时隐藏，需恢复时取消注释 + 把下面 system-menus.html 在 DEFAULT_MENUS 的 status 改回 1）
+      // { id: "system-menus", nameKey: "menu.system-menus", href: "system-menus.html" },
     ],
   },
 ];

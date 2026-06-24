@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.system-roles.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=15"></script>
+  <script src="assets/js/i18n.js?v=16"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     /* 登录守卫 */
@@ -80,12 +80,12 @@
      *       ├─ risk (上级: admin)
      *       └─ fin (上级: admin)
      */
-    const ROLES_KEY = 'zb_admin_roles_v2';
+    const ROLES_KEY = 'zb_admin_roles_v3';
     const DEFAULT_ROLES = [
       {
         id: 1, code: 'admin', nameZh: '超级管理员', nameEn: 'Super Admin',
         descZh: '拥有全部权限', descEn: 'Full permissions',
-        parentId: null,
+        parentId: null, scopeType: 'hierarchy',
         userCount: 1, createdAt: '2026-04-01', status: 1,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -96,7 +96,7 @@
       {
         id: 2, code: 'ops', nameZh: '运营', nameEn: 'Operations',
         descZh: '运营日常管理', descEn: 'Daily operations',
-        parentId: 1,
+        parentId: 1, scopeType: 'hierarchy',
         userCount: 2, createdAt: '2026-04-12', status: 1,
         permissions: {
           projects: ['dana', 'tradewill'],
@@ -107,7 +107,7 @@
       {
         id: 3, code: 'cs', nameZh: '客服', nameEn: 'Customer Service',
         descZh: '处理用户咨询', descEn: 'User support',
-        parentId: 2,
+        parentId: 2, scopeType: 'peer',
         userCount: 1, createdAt: '2026-04-20', status: 1,
         permissions: {
           projects: ['dana'],
@@ -118,7 +118,7 @@
       {
         id: 4, code: 'risk', nameZh: '风控', nameEn: 'Risk Control',
         descZh: '审核与风险管控', descEn: 'Audit & risk',
-        parentId: 1,
+        parentId: 1, scopeType: 'peer',
         userCount: 1, createdAt: '2026-05-01', status: 1,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -129,7 +129,7 @@
       {
         id: 5, code: 'fin', nameZh: '财务', nameEn: 'Finance',
         descZh: '资金审核与对账', descEn: 'Finance audit',
-        parentId: 1,
+        parentId: 1, scopeType: 'peer',
         userCount: 1, createdAt: '2026-05-10', status: 0,
         permissions: {
           projects: ['dana', 'tradewill', 'zibt'],
@@ -488,6 +488,13 @@
                 <p class="form-tip">${t('role.field.parentTip')}</p>
               </div>
               <div class="form-line full">
+                <label class="checkbox-line">
+                  <input type="checkbox" id="fScopeHierarchy" />
+                  <span class="checkbox-text">${t('role.field.scopeLabel')}</span>
+                </label>
+                <p class="form-tip">${t('role.field.scopeTip')}</p>
+              </div>
+              <div class="form-line full">
                 <label>${t('role.field.descLabel')}</label>
                 <input type="text" id="fDescZh" placeholder="中文描述" maxlength="80" />
               </div>
@@ -606,6 +613,8 @@
       document.getElementById('fDescEn').value   = role ? role.descEn : '';
       document.getElementById('fStatus').value   = role ? String(role.status) : '1';
       document.getElementById('fCode').disabled  = !!role; // 编辑时编码不可改
+      // 层级权限复选框：勾选 = scopeType 'hierarchy'，不勾 = 'peer'（默认）
+      document.getElementById('fScopeHierarchy').checked = !!(role && role.scopeType === 'hierarchy');
 
       // 父级角色下拉：编辑时排除"自己"和"所有后代"，防止循环引用
       const parentSel = document.getElementById('fParent');
@@ -931,6 +940,8 @@
         const status = parseInt(document.getElementById('fStatus').value, 10);
         const parentRaw = document.getElementById('fParent').value;
         const parentId  = parentRaw ? parseInt(parentRaw, 10) : null;
+        // 权限作用域：勾选 'hierarchy'（仅可管理下属角色及其用户）；不勾 'peer'（默认平级）
+        const scopeType = document.getElementById('fScopeHierarchy').checked ? 'hierarchy' : 'peer';
 
         if (!code) return toast(t('role.val.codeRequired'), 'danger');
         if (!/^[a-zA-Z0-9_]{3,20}$/.test(code)) return toast(t('role.val.codeFormat'), 'danger');
@@ -945,14 +956,14 @@
 
         if (editingId) {
           const r = ROLES.find((x) => x.id === editingId);
-          Object.assign(r, { nameZh, nameEn, descZh, descEn, status, parentId });
+          Object.assign(r, { nameZh, nameEn, descZh, descEn, status, parentId, scopeType });
           toast(t('role.toast.saved'), 'success');
         } else {
           if (ROLES.some((x) => x.code === code)) return toast(t('role.val.codeExists', { n: code }), 'danger');
           ROLES.unshift({
             id: Date.now(),
             code, nameZh, nameEn, descZh, descEn, status,
-            parentId,
+            parentId, scopeType,
             userCount: 0,
             createdAt: new Date().toISOString().slice(0, 10),
             permissions: {},
@@ -1139,6 +1150,25 @@
       font-size: var(--fs-meta);
       color: var(--color-text-muted);
       line-height: 1.4;
+    }
+    /* 复选框 + 文字的单行行（用于"层级权限"等开关型字段） */
+    .checkbox-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .checkbox-line input[type="checkbox"] {
+      width: 14px; height: 14px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+      margin: 0;
+    }
+    .checkbox-line .checkbox-text {
+      font-size: var(--fs-body-sm);
+      color: var(--color-text);
+      font-weight: var(--fw-medium);
     }
 
     /* 列表「上级角色」列 tag */

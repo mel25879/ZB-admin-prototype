@@ -171,6 +171,8 @@ const I18N = {
     'role.field.parentLabel': '上级角色',
     'role.field.parentTip': '可选。不选则作为顶级根角色。子角色只能挂在自己之外的非后代角色下，以避免循环。',
     'role.parent.topLevel': '— 无（顶级角色）—',
+    'role.field.scopeLabel': '层级权限',
+    'role.field.scopeTip': '勾选后该角色按层级作用域生效（仅可管理自己的下级角色及其用户）；不勾选则按平级权限处理（默认）。',
     /* 权限配置 */
     'role.perm.col.module': '功能模块',
     'role.perm.col.actions': '操作权限',
@@ -799,6 +801,8 @@ const I18N = {
     'role.field.parentLabel': 'Parent Role',
     'role.field.parentTip': 'Optional. Leave empty to be a top-level root role. Child roles cannot point to themselves or any of their descendants (no cycles).',
     'role.parent.topLevel': '— None (Top-level) —',
+    'role.field.scopeLabel': 'Hierarchical Scope',
+    'role.field.scopeTip': 'When checked, this role operates with hierarchical scope (can only manage its own descendant roles and their users); when unchecked, peer scope applies (default).',
     'role.perm.col.module': 'Module',
     'role.perm.col.actions': 'Permissions',
     'role.perm.selectAll': 'Select All',
