@@ -208,20 +208,18 @@
         <div class="table-wrap">
           <table class="data-table biz-table">
             <colgroup>
-              <col style="width:11%">
-              <col style="width:13%">
+              <col style="width:15%">
+              <col style="width:15%">
               <col style="width:18%">
-              <col style="width:12%">
               <col style="width:8%">
-              <col style="width:11%">
-              <col style="width:7%">
+              <col style="width:15%">
+              <col style="width:9%">
               <col style="width:20%">
             </colgroup>
             <thead>
               <tr>
-                <th>${t('role.col.code')}</th>
-                <th>${t('role.col.name')}</th>
-                <th>${t('role.col.desc')}</th>
+                <th>${t('role.col.nameZh')}</th>
+                <th>${t('role.col.nameEn')}</th>
                 <th>${t('role.col.parent')}</th>
                 <th class="text-center">${t('role.col.userCount')}</th>
                 <th>${t('role.col.created')}</th>
@@ -234,9 +232,8 @@
                 const parentName = getParentDisplayName(r);
                 return `
                 <tr data-id="${r.id}">
-                  <td class="mono"><b>${r.code}</b></td>
-                  <td><b>${lang === 'en' ? r.nameEn : r.nameZh}</b></td>
-                  <td class="muted">${lang === 'en' ? r.descEn : r.descZh}</td>
+                  <td><b>${r.nameZh}</b></td>
+                  <td>${r.nameEn}</td>
                   <td>${parentName
                     ? `<span class="parent-tag">${parentName}</span>`
                     : `<span class="muted">${t('role.parent.topLevel')}</span>`}</td>
@@ -254,7 +251,7 @@
                     <button class="t-act t-del" data-act="del" data-id="${r.id}">${t('common.delete')}</button>
                   </td>
                 </tr>
-              `;}).join('') : emptyRow(8)}
+              `;}).join('') : emptyRow(7)}
             </tbody>
           </table>
         </div>
