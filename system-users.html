@@ -11,7 +11,7 @@
 </head>
 <body data-title-key="page.system-users.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=12"></script>
+  <script src="assets/js/i18n.js?v=20"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     /* ============== 登录守卫 ============== */
@@ -36,21 +36,29 @@
     /* ============== Mock 数据 ============== */
     // 角色用 key，渲染时翻译
     const ROLE_KEYS = ['role.admin', 'role.ops', 'role.cs', 'role.risk', 'role.fin'];
-    const SYS_USERS_KEY = 'zb_admin_sys_users_v1';
+    const SYS_USERS_KEY = 'zb_admin_sys_users_v2';
 
+    /* roleKeys：数组，支持一个用户绑定多个角色（v2 新版结构）
+     * 旧版 roleKey（单值字符串）→ loadUsers 中自动迁移为 roleKeys */
     const DEFAULT_USERS = [
-      { id: 1, username: 'admin',    realname: '张三', email: 'admin@zb.com',     phone: '13812345678', roleKey: 'role.admin', status: 1, lastLogin: '2026-05-23 14:23:18' },
-      { id: 2, username: 'ops001',   realname: '李四', email: 'liyao@zb.com',     phone: '13900001111', roleKey: 'role.ops',   status: 1, lastLogin: '2026-05-23 09:12:05' },
-      { id: 3, username: 'cs001',    realname: '王五', email: 'wangwu@zb.com',    phone: '15822223333', roleKey: 'role.cs',    status: 1, lastLogin: '2026-05-22 22:48:30' },
-      { id: 4, username: 'risk001',  realname: '赵六', email: 'zhao6@zb.com',     phone: '13644445555', roleKey: 'role.risk',  status: 1, lastLogin: '2026-05-22 11:30:42' },
-      { id: 5, username: 'fin001',   realname: '钱七', email: 'qian7@zb.com',     phone: '17066667777', roleKey: 'role.fin',   status: 0, lastLogin: '2026-05-20 16:05:11' },
-      { id: 6, username: 'ops002',   realname: '孙八', email: 'sun8@zb.com',      phone: '13388889999', roleKey: 'role.ops',   status: 1, lastLogin: '2026-05-19 08:14:55' },
+      { id: 1, username: 'admin',    realname: '张三', email: 'admin@zb.com',     phone: '13812345678', roleKeys: ['role.admin'],            status: 1, lastLogin: '2026-05-23 14:23:18' },
+      { id: 2, username: 'ops001',   realname: '李四', email: 'liyao@zb.com',     phone: '13900001111', roleKeys: ['role.ops', 'role.cs'],   status: 1, lastLogin: '2026-05-23 09:12:05' },
+      { id: 3, username: 'cs001',    realname: '王五', email: 'wangwu@zb.com',    phone: '15822223333', roleKeys: ['role.cs'],               status: 1, lastLogin: '2026-05-22 22:48:30' },
+      { id: 4, username: 'risk001',  realname: '赵六', email: 'zhao6@zb.com',     phone: '13644445555', roleKeys: ['role.risk', 'role.fin'], status: 1, lastLogin: '2026-05-22 11:30:42' },
+      { id: 5, username: 'fin001',   realname: '钱七', email: 'qian7@zb.com',     phone: '17066667777', roleKeys: ['role.fin'],              status: 0, lastLogin: '2026-05-20 16:05:11' },
+      { id: 6, username: 'ops002',   realname: '孙八', email: 'sun8@zb.com',      phone: '13388889999', roleKeys: ['role.ops'],              status: 1, lastLogin: '2026-05-19 08:14:55' },
     ];
 
     function loadUsers() {
       try {
         const d = JSON.parse(localStorage.getItem(SYS_USERS_KEY));
-        if (Array.isArray(d) && d.length) return d;
+        if (Array.isArray(d) && d.length) {
+          // 兼容旧版单角色字段 roleKey → 升级为 roleKeys 数组
+          return d.map(u => ({
+            ...u,
+            roleKeys: Array.isArray(u.roleKeys) ? u.roleKeys : (u.roleKey ? [u.roleKey] : []),
+          }));
+        }
       } catch (e) {}
       return DEFAULT_USERS.slice();
     }
@@ -66,14 +74,14 @@
         <div class="table-wrap">
           <table class="data-table biz-table">
             <colgroup>
+              <col style="width:11%">
+              <col style="width:9%">
+              <col style="width:16%">
               <col style="width:12%">
               <col style="width:10%">
-              <col style="width:18%">
-              <col style="width:14%">
+              <col style="width:8%">
               <col style="width:12%">
-              <col style="width:9%">
-              <col style="width:13%">
-              <col style="width:12%">
+              <col style="width:22%">
             </colgroup>
             <thead>
               <tr>
@@ -94,14 +102,14 @@
                   <td>${u.realname}</td>
                   <td><span class="link-text">${u.email}</span></td>
                   <td class="muted">${u.phone}</td>
-                  <td>${roleBadge(u.roleKey)}</td>
+                  <td>${roleBadges(u.roleKeys)}</td>
                   <td class="text-center">
                     <span class="st-tag ${u.status ? 'st-active' : 'st-disabled'}">
                       ${u.status ? t('common.statusEnabled') : t('common.statusDisabled')}
                     </span>
                   </td>
                   <td class="muted">${u.lastLogin}</td>
-                  <td class="text-center">
+                  <td class="op-cell">
                     <button class="t-act" data-act="edit" data-id="${u.id}">${t('common.edit')}</button>
                     <button class="t-act" data-act="reset" data-id="${u.id}">${t('sysUser.btnResetPwd')}</button>
                     <button class="t-act" data-act="toggle" data-id="${u.id}">${u.status ? t('common.disable') : t('common.enable')}</button>
@@ -115,6 +123,13 @@
       `;
     }
 
+    /* 渲染多角色：返回多个 tag 平铺（支持空数组）*/
+    function roleBadges(roleKeys) {
+      if (!Array.isArray(roleKeys) || roleKeys.length === 0) {
+        return '<span class="muted">-</span>';
+      }
+      return `<div class="role-tags">${roleKeys.map(k => roleBadge(k)).join('')}</div>`;
+    }
     function roleBadge(roleKey) {
       const map = {
         'role.admin': 'role-admin',
@@ -228,12 +243,17 @@
                 <label>${t('sysUser.field.phoneLabel')}</label>
                 <input type="tel" id="fPhone" placeholder="${t('sysUser.field.phonePlaceholder')}" maxlength="11" />
               </div>
-              <div class="form-line">
+              <div class="form-line form-line-roles">
                 <label>${t('sysUser.field.roleLabel')} <span class="required">*</span></label>
-                <select id="fRole">
-                  <option value="">${t('sysUser.field.rolePlaceholder')}</option>
-                  ${ROLE_KEYS.map(k => `<option value="${k}">${t(k)}</option>`).join('')}
-                </select>
+                <div class="role-checkbox-group" id="fRoleGroup">
+                  ${ROLE_KEYS.map(k => `
+                    <label class="role-check">
+                      <input type="checkbox" data-role-key="${k}" />
+                      <span>${t(k)}</span>
+                    </label>
+                  `).join('')}
+                </div>
+                <p class="form-tip">${t('sysUser.field.roleMultiTip')}</p>
               </div>
               <div class="form-line">
                 <label>${t('sysUser.field.statusLabel')}</label>
@@ -263,7 +283,11 @@
       document.getElementById('fRealname').value = user ? user.realname : '';
       document.getElementById('fEmail').value    = user ? user.email : '';
       document.getElementById('fPhone').value    = user ? user.phone : '';
-      document.getElementById('fRole').value     = user ? user.roleKey : '';
+      // 多角色回填：勾选用户当前的所有角色，未选用户清空
+      const userRoles = user && Array.isArray(user.roleKeys) ? user.roleKeys : [];
+      document.querySelectorAll('#fRoleGroup [data-role-key]').forEach(cb => {
+        cb.checked = userRoles.includes(cb.dataset.roleKey);
+      });
       document.getElementById('fStatus').value   = user ? String(user.status) : '1';
       // 编辑模式下用户名不能改
       document.getElementById('fUsername').disabled = !!user;
@@ -295,7 +319,7 @@
             toast(u.status ? t('toast.enabled', {n: u.username}) : t('toast.disabled', {n: u.username}), 'success');
           }
           else if (act === 'del') {
-            if (u.roleKey === 'role.admin') return toast(t('toast.cannotDeleteAdmin'), 'danger');
+            if (Array.isArray(u.roleKeys) && u.roleKeys.includes('role.admin')) return toast(t('toast.cannotDeleteAdmin'), 'danger');
             if (confirm(t('toast.confirmDelete', {n: u.username}))) {
               USERS = USERS.filter((x) => x.id !== id);
               saveUsers(USERS); refresh();
@@ -343,7 +367,9 @@
         const realname = document.getElementById('fRealname').value.trim();
         const email    = document.getElementById('fEmail').value.trim();
         const phone    = document.getElementById('fPhone').value.trim();
-        const roleKey  = document.getElementById('fRole').value;
+        // 多角色：从所有勾选的 checkbox 取 roleKey
+        const roleKeys = Array.from(document.querySelectorAll('#fRoleGroup [data-role-key]:checked'))
+          .map(cb => cb.dataset.roleKey);
         const status   = parseInt(document.getElementById('fStatus').value, 10);
 
         if (!username) return toast(t('val.usernameRequired'), 'danger');
@@ -351,11 +377,11 @@
         if (!realname) return toast(t('val.realnameRequired'), 'danger');
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast(t('val.emailInvalid'), 'danger');
         if (phone && !/^1[3-9]\d{9}$/.test(phone)) return toast(t('val.phoneInvalid'), 'danger');
-        if (!roleKey) return toast(t('val.roleRequired'), 'danger');
+        if (roleKeys.length === 0) return toast(t('val.roleRequired'), 'danger');
 
         if (editingId) {
           const u = USERS.find((x) => x.id === editingId);
-          Object.assign(u, { realname, email, phone, roleKey, status });
+          Object.assign(u, { realname, email, phone, roleKeys, status });
           toast(t('toast.saved'), 'success');
         } else {
           if (USERS.some((x) => x.username === username)) {
@@ -363,7 +389,7 @@
           }
           USERS.unshift({
             id: Date.now(),
-            username, realname, email, phone, roleKey, status,
+            username, realname, email, phone, roleKeys, status,
             lastLogin: '-',
           });
           toast(t('toast.created'), 'success');
@@ -399,6 +425,63 @@
     .role-cs    { background: #dcfce7; color: #15803d; }
     .role-risk  { background: #fee2e2; color: #b91c1c; }
     .role-fin   { background: #ede9fe; color: #6d28d9; }
+
+    /* 多角色：列表单元格里多 tag 平铺（允许换行）*/
+    .role-tags {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      align-items: center;
+    }
+
+    /* 多角色复选框组（弹窗内）*/
+    .role-checkbox-group {
+      display: flex; flex-wrap: wrap; gap: 8px 12px;
+      padding: 10px 12px;
+      background: #fafbfc;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      min-height: 40px;
+    }
+    .role-check {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: #fff;
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+      cursor: pointer; user-select: none;
+      font-size: var(--fs-body-sm);
+      transition: all 0.15s;
+    }
+    .role-check:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+    .role-check input[type="checkbox"] {
+      width: 14px; height: 14px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+      margin: 0;
+    }
+    .role-check input[type="checkbox"]:checked + span {
+      color: var(--color-primary);
+      font-weight: var(--fw-semibold);
+    }
+    .form-line-roles { grid-column: 1 / -1; }  /* 多角色字段横跨两列 */
+
+    /* 字段下方灰色辅助说明 */
+    .form-tip {
+      margin-top: 4px;
+      font-size: var(--fs-meta);
+      color: var(--color-text-muted);
+      line-height: 1.4;
+    }
+
+    /* —— 操作列：按钮平铺展示，不被表格 fixed-layout 截断 —— */
+    .op-cell {
+      text-align: center;
+      white-space: nowrap;
+      font-size: var(--fs-body-sm);
+    }
+    .op-cell .t-act { padding: 2px 6px; }
 
     /* —— 新增按钮 —— */
     .btn-add {

@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.agents.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=12"></script>
+  <script src="assets/js/i18n.js?v=20"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
@@ -112,7 +112,7 @@
     //   1) 精简到 10 条（L1 × 3 + L2 × 4 + L3 × 3）
     //   2) 邮箱与 invited-users.html 的 inviter 字段一一对应，跨页一致
     //   3) 新增 L3 代理 → 操作列可"设置为一级代理"
-    const AGENTS_KEY = 'zb_admin_agents_v11';
+    const AGENTS_KEY = 'zb_admin_agents_v13';
     /* 仅 ZB 业务类型（IB / KOL 已移除）
      * monthCommission / pendingCommission：当月获取 / 待结算 佣金（所有代理都有）
      * monthShare      / pendingShare：     当月获得 / 待结算 分成（L1 + L2 有，L3 没有）
@@ -124,21 +124,21 @@
      */
     const DEFAULT_AGENTS = [
       /* === L1 一级代理（3 条）：无 inviter；从 L2 / L3 链路获得分成 === */
-      { id:'A100001', email:'alice@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'app', country:'IN', regTime:'2026-03-15 14:32', userCount:1620, tradeUserCount:512, lots:18560.25, monthCommission:42.80, pendingCommission:12.50, monthShare:128.40, pendingShare:32.10, dept:'sales',  person:'zhangwei' },
+      { id:'A100001', email:'alice@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'app', country:'IN', regTime:'2026-03-15 14:32', upgradeTime:'2026-03-20 10:00', userCount:1620, tradeUserCount:512, lots:18560.25, closeLots:17800.00, monthOpenLots:4200.00, monthCloseLots:4050.00, monthCommission:42.80, pendingCommission:12.50, monthShare:128.40, pendingShare:32.10, dept:'sales',  person:'zhangwei' },
       // A100002 历史上曾被开启过试用期，5 月失效（演示"已失效"状态）
-      { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', userCount:320,  tradeUserCount:88,  lots:2105.50,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei', lastTestExpire:'2026-05-15' },
-      { id:'A100003', email:'frank@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'h5',  country:'IN', regTime:'2026-05-08 08:50', userCount:180,  tradeUserCount:42,  lots:980.10,   monthCommission:3.20,  pendingCommission:0.90,  monthShare:12.50,  pendingShare:3.40,  dept:'sales',  person:'liuyang' },
+      { id:'A100002', email:'bob@outlook.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'web', country:'ID', regTime:'2026-04-02 09:15', upgradeTime:'2026-04-08 11:30', userCount:320,  tradeUserCount:88,  lots:2105.50,  closeLots:2050.00,  monthOpenLots:520.00,  monthCloseLots:500.00,  monthCommission:5.60,  pendingCommission:1.80,  monthShare:22.40,  pendingShare:6.20,  dept:'sales',  person:'zhangwei', lastTestExpire:'2026-05-15' },
+      { id:'A100003', email:'frank@gmail.com',   inviter:'-',               type:'ZB', tier:'L1', project:'zibt', source:'natural',  channel:'h5',  country:'IN', regTime:'2026-05-08 08:50', upgradeTime:'2026-05-10 14:00', userCount:180,  tradeUserCount:42,  lots:980.10,   closeLots:920.00,   monthOpenLots:280.00,  monthCloseLots:260.00,  monthCommission:3.20,  pendingCommission:0.90,  monthShare:12.50,  pendingShare:3.40,  dept:'sales',  person:'liuyang' },
 
       /* === L2 二级代理（4 条）：inviter 是 L1；从 L3 链路获得分成 === */
-      { id:'A100004', email:'amy@163.com',       inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'pc',  country:'CN', regTime:'2026-01-28 10:24', userCount:2400, tradeUserCount:820, lots:32850.00, monthCommission:76.40, pendingCommission:22.30, monthShare:18.60,  pendingShare:5.20,  dept:'ops',    person:'lina' },
-      { id:'A100005', email:'mary@hotmail.com',  inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'app', country:'VN', regTime:'2026-02-14 12:00', userCount:780,  tradeUserCount:230, lots:8420.30,  monthCommission:18.50, pendingCommission:5.20,  monthShare:9.40,   pendingShare:2.10,  dept:'sales',  person:'zhangwei' },
-      { id:'A100006', email:'sara@gmail.com',    inviter:'bob@outlook.com', type:'ZB', tier:'L2', project:'zibt', source:'promo',    channel:'web', country:'IN', regTime:'2026-04-18 16:22', userCount:920,  tradeUserCount:280, lots:9650.50,  monthCommission:24.20, pendingCommission:7.10,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
-      { id:'A100007', email:'cathy@qq.com',      inviter:'frank@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'web', country:'BR', regTime:'2026-03-22 13:55', userCount:1080, tradeUserCount:325, lots:14200.75, monthCommission:35.60, pendingCommission:10.40, monthShare:0,      pendingShare:0,     dept:'cs',     person:'sunmei' },
+      { id:'A100004', email:'amy@163.com',       inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'pc',  country:'CN', regTime:'2026-01-28 10:24', upgradeTime:'2026-02-15 09:00', userCount:2400, tradeUserCount:820, lots:32850.00, closeLots:31800.00, monthOpenLots:7400.00, monthCloseLots:7100.00, monthCommission:76.40, pendingCommission:22.30, monthShare:18.60,  pendingShare:5.20,  dept:'ops',    person:'lina' },
+      { id:'A100005', email:'mary@hotmail.com',  inviter:'alice@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'app', country:'VN', regTime:'2026-02-14 12:00', upgradeTime:'2026-03-01 11:00', userCount:780,  tradeUserCount:230, lots:8420.30,  closeLots:8100.00,  monthOpenLots:1850.00, monthCloseLots:1720.00, monthCommission:18.50, pendingCommission:5.20,  monthShare:9.40,   pendingShare:2.10,  dept:'sales',  person:'zhangwei' },
+      { id:'A100006', email:'sara@gmail.com',    inviter:'bob@outlook.com', type:'ZB', tier:'L2', project:'zibt', source:'promo',    channel:'web', country:'IN', regTime:'2026-04-18 16:22', upgradeTime:'2026-04-25 14:30', userCount:920,  tradeUserCount:280, lots:9650.50,  closeLots:9300.00,  monthOpenLots:2100.00, monthCloseLots:2020.00, monthCommission:24.20, pendingCommission:7.10,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
+      { id:'A100007', email:'cathy@qq.com',      inviter:'frank@gmail.com', type:'ZB', tier:'L2', project:'zibt', source:'invite',   channel:'web', country:'BR', regTime:'2026-03-22 13:55', upgradeTime:'2026-04-05 16:00', userCount:1080, tradeUserCount:325, lots:14200.75, closeLots:13750.00, monthOpenLots:3200.00, monthCloseLots:3080.00, monthCommission:35.60, pendingCommission:10.40, monthShare:0,      pendingShare:0,     dept:'cs',     person:'sunmei' },
 
       /* === L3 三级代理（3 条）：inviter 是 L2；最底层，无 share === */
-      { id:'A100008', email:'lucas@gmail.com',   inviter:'mary@hotmail.com',inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'app', country:'NG', regTime:'2026-05-21 20:14', userCount:62,   tradeUserCount:8,   lots:120.00,   monthCommission:0.40,  pendingCommission:0.12,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
-      { id:'A100009', email:'eva@163.com',       inviter:'sara@gmail.com',  inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'h5',  country:'PH', regTime:'2026-02-08 17:42', userCount:580,  tradeUserCount:175, lots:5240.50,  monthCommission:13.20, pendingCommission:3.80,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
-      { id:'A100010', email:'derek@gmail.com',   inviter:'cathy@qq.com',    inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'promo',    channel:'app', country:'SG', regTime:'2026-05-03 08:18', userCount:260,  tradeUserCount:72,  lots:1820.00,  monthCommission:6.20,  pendingCommission:1.80,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
+      { id:'A100008', email:'lucas@gmail.com',   inviter:'mary@hotmail.com',inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'app', country:'NG', regTime:'2026-05-21 20:14', upgradeTime:'2026-05-25 09:00', userCount:62,   tradeUserCount:8,   lots:120.00,   closeLots:110.00,   monthOpenLots:30.00,   monthCloseLots:28.00,   monthCommission:0.40,  pendingCommission:0.12,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
+      { id:'A100009', email:'eva@163.com',       inviter:'sara@gmail.com',  inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'invite',   channel:'h5',  country:'PH', regTime:'2026-02-08 17:42', upgradeTime:'2026-02-20 10:30', userCount:580,  tradeUserCount:175, lots:5240.50,  closeLots:5050.00,  monthOpenLots:1180.00, monthCloseLots:1120.00, monthCommission:13.20, pendingCommission:3.80,  monthShare:0,      pendingShare:0,     dept:'cs',     person:'zhaolei' },
+      { id:'A100010', email:'derek@gmail.com',   inviter:'cathy@qq.com',    inviterTier:'L2',type:'ZB', tier:'L3', project:'zibt', source:'promo',    channel:'app', country:'SG', regTime:'2026-05-03 08:18', upgradeTime:'2026-05-12 13:45', userCount:260,  tradeUserCount:72,  lots:1820.00,  closeLots:1740.00,  monthOpenLots:420.00,  monthCloseLots:400.00,  monthCommission:6.20,  pendingCommission:1.80,  monthShare:0,      pendingShare:0,     dept:'market', person:'chenjie' },
     ];
 
     function loadAgents() {
@@ -220,12 +220,17 @@
       channel:        { width: 80,  header: 'agents.col.channel',        render: a => `<td>${channelTag(a.channel)}</td>` },
       // 地区列：现只显示 +XX 区号，宽度收窄
       country:        { width: 90,  header: 'agents.col.country',        render: a => `<td>${countryTag(a.country)}</td>` },
-      regTime:        { width: 160, header: 'agents.col.regTime',        render: a => `<td class="num small nowrap">${a.regTime}</td>` },
+      regTime:        { width: 150, header: 'agents.col.regTime',        render: a => `<td class="num small nowrap">${a.regTime}</td>` },
+      upgradeTime:    { width: 150, header: 'agents.col.upgradeTime',    render: a => `<td class="num small nowrap">${a.upgradeTime || '<span class="muted">-</span>'}</td>` },
       // 邀请用户数：容纳 5 字标题
       userCount:      { width: 110, header: 'agents.col.userCount',      align: 'right',  render: a => `<td class="num text-right">${fmtNum(a.userCount)}</td>` },
       // 有效邀请数量
       tradeUserCount: { width: 140, header: 'agents.col.tradeUserCount', align: 'right', render: a => `<td class="num text-right">${fmtNum(a.tradeUserCount)}</td>` },
-      lots:              { width: 160, header: 'agents.col.lots',              align: 'right',  render: a => `<td class="num text-right">${fmtUSDT(a.lots)}</td>` },
+      // 累计交易量（lots = 累计开仓）+ 累计平仓 / 当月交易总额（= 当月开仓 + 当月平仓）
+      lots:              { width: 150, header: 'agents.col.lots',              align: 'right',  render: a => `<td class="num text-right">${fmtUSDT(a.lots)}</td>` },
+      closeLots:         { width: 150, header: 'agents.col.closeLots',         align: 'right',  render: a => `<td class="num text-right">${fmtUSDT(a.closeLots)}</td>` },
+      // 当月交易总额：按"当月开仓 + 当月平仓"双边合计动态计算，避免新增字段需要 bump 缓存版本
+      monthTradeLots:    { width: 150, header: 'agents.col.monthTradeLots',    align: 'right',  render: a => `<td class="num text-right strong">${fmtUSDT((a.monthOpenLots || 0) + (a.monthCloseLots || 0))}</td>` },
       // 当月 → 绿色高亮（已结算到本月数据）；待结算 → 橙色（暂未结算，需关注）
       monthCommission:   { width: 140, header: 'agents.col.monthCommission',   align: 'right',  render: a => `<td class="num text-right strong">${fmtUSDT(a.monthCommission)}</td>` },
       pendingCommission: { width: 130, header: 'agents.col.pendingCommission', align: 'right',  render: a => `<td class="num text-right pending">${fmtUSDT(a.pendingCommission)}</td>` },
@@ -237,7 +242,7 @@
     /* 各 tab 的列顺序：ZB 含 share / pendingShare；IB / KOL 不含
      * 列排布：当月X 紧贴对应的 待结算X，方便对比 */
     const SCHEMA_BY_TYPE = {
-      ZB:  ['tier','testStatus','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','monthShare','pendingShare','actions'],
+      ZB:  ['tier','testStatus','id','email','country','regTime','upgradeTime','userCount','tradeUserCount','lots','closeLots','monthTradeLots','monthCommission','pendingCommission','monthShare','pendingShare','actions'],
       IB:  ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
       KOL: ['tier','id','email','country','regTime','userCount','tradeUserCount','lots','monthCommission','pendingCommission','actions'],
     };

@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.invited-users.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=12"></script>
+  <script src="assets/js/i18n.js?v=20"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
@@ -105,18 +105,18 @@
     //   L1 → 该用户可被设置为"二级代理"
     //   L2 → 该用户可被设置为"三级代理"
     //   L3 → 该用户为最底层链路，不可再设置为下级代理
-    const USERS_KEY = 'zb_admin_invited_users_v5';
+    const USERS_KEY = 'zb_admin_invited_users_v6';
     const DEFAULT_USERS = [
-      { userId:'U200001', email:'tony@gmail.com',   regTime:'2026-05-19 14:23', country:'IN', channel:'app', inviter:'alice@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:520.00,  tradeVolume:18500.50, commission:35.50 },
-      { userId:'U200002', email:'lucy@outlook.com', regTime:'2026-05-18 09:12', country:'ID', channel:'web', inviter:'bob@outlook.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:300.00,  tradeVolume:12000.00, commission:12.80 },
-      { userId:'U200003', email:'kevin@163.com',    regTime:'2026-05-15 22:48', country:'IN', channel:'h5',  inviter:'frank@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:0, deposit:50.00,   tradeVolume:0,        commission:0     },
-      { userId:'U200004', email:'mike@qq.com',      regTime:'2026-05-12 11:30', country:'CN', channel:'pc',  inviter:'amy@163.com',       agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:1500.00, tradeVolume:88200.00, commission:120.40},
-      { userId:'U200005', email:'nina@hotmail.com', regTime:'2026-05-10 16:05', country:'TH', channel:'app', inviter:'mary@hotmail.com',  agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:200.00,  tradeVolume:5800.00,  commission:4.20  },
-      { userId:'U200006', email:'oscar@gmail.com',  regTime:'2026-05-08 20:31', country:'NG', channel:'app', inviter:'sara@gmail.com',    agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:0, deposit:0,       tradeVolume:0,        commission:0     },
-      { userId:'U200007', email:'paul@163.com',     regTime:'2026-05-06 08:14', country:'IN', channel:'web', inviter:'cathy@qq.com',      agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:680.00,  tradeVolume:32100.00, commission:48.30 },
-      { userId:'U200008', email:'queen@qq.com',     regTime:'2026-05-05 13:20', country:'BR', channel:'web', inviter:'lucas@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:400.00,  tradeVolume:14200.75, commission:18.20 },
-      { userId:'U200009', email:'ricky@gmail.com',  regTime:'2026-05-03 19:08', country:'VN', channel:'app', inviter:'eva@163.com',       agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:850.00,  tradeVolume:8420.30,  commission:9.80  },
-      { userId:'U200010', email:'sophie@163.com',   regTime:'2026-05-02 10:30', country:'PH', channel:'h5',  inviter:'derek@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:230.00,  tradeVolume:5240.50,  commission:6.50  },
+      { userId:'U200001', email:'tony@gmail.com',   regTime:'2026-05-19 14:23', country:'IN', channel:'app', inviter:'alice@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:520.00,  openVolume:18500.50, closeVolume:17800.00, commission:35.50 },
+      { userId:'U200002', email:'lucy@outlook.com', regTime:'2026-05-18 09:12', country:'ID', channel:'web', inviter:'bob@outlook.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:1, deposit:300.00,  openVolume:12000.00, closeVolume:11500.00, commission:12.80 },
+      { userId:'U200003', email:'kevin@163.com',    regTime:'2026-05-15 22:48', country:'IN', channel:'h5',  inviter:'frank@gmail.com',   agentType:'ZB', agentTier:'L1', project:'zibt', hasTrade:0, deposit:50.00,   openVolume:0,        closeVolume:0,        commission:0     },
+      { userId:'U200004', email:'mike@qq.com',      regTime:'2026-05-12 11:30', country:'CN', channel:'pc',  inviter:'amy@163.com',       agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:1500.00, openVolume:88200.00, closeVolume:86500.00, commission:120.40},
+      { userId:'U200005', email:'nina@hotmail.com', regTime:'2026-05-10 16:05', country:'TH', channel:'app', inviter:'mary@hotmail.com',  agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:200.00,  openVolume:5800.00,  closeVolume:3200.00,  commission:4.20  },
+      { userId:'U200006', email:'oscar@gmail.com',  regTime:'2026-05-08 20:31', country:'NG', channel:'app', inviter:'sara@gmail.com',    agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:0, deposit:0,       openVolume:0,        closeVolume:0,        commission:0     },
+      { userId:'U200007', email:'paul@163.com',     regTime:'2026-05-06 08:14', country:'IN', channel:'web', inviter:'cathy@qq.com',      agentType:'ZB', agentTier:'L2', project:'zibt', hasTrade:1, deposit:680.00,  openVolume:32100.00, closeVolume:31200.00, commission:48.30 },
+      { userId:'U200008', email:'queen@qq.com',     regTime:'2026-05-05 13:20', country:'BR', channel:'web', inviter:'lucas@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:400.00,  openVolume:14200.75, closeVolume:13800.00, commission:18.20 },
+      { userId:'U200009', email:'ricky@gmail.com',  regTime:'2026-05-03 19:08', country:'VN', channel:'app', inviter:'eva@163.com',       agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:850.00,  openVolume:8420.30,  closeVolume:8200.00,  commission:9.80  },
+      { userId:'U200010', email:'sophie@163.com',   regTime:'2026-05-02 10:30', country:'PH', channel:'h5',  inviter:'derek@gmail.com',   agentType:'ZB', agentTier:'L3', project:'zibt', hasTrade:1, deposit:230.00,  openVolume:5240.50,  closeVolume:5050.00,  commission:6.50  },
     ];
 
     function loadUsers() {
@@ -169,7 +169,8 @@
           <td class="nowrap">${u.inviter === '-' ? '<span class="muted">-</span>' : u.inviter}</td>
           <td class="text-center">${tierTag(u.agentTier)}</td>
           <td class="num text-right">${fmtUSDT(u.deposit)}</td>
-          <td class="num text-right">${fmtUSDT(u.tradeVolume)}</td>
+          <td class="num text-right">${fmtUSDT(u.openVolume)}</td>
+          <td class="num text-right">${fmtUSDT(u.closeVolume)}</td>
           <td class="op-cell">${promoteButton(u)}</td>
         </tr>
       `).join('');
@@ -179,7 +180,7 @@
             <colgroup>
               <col style="width:100px"><col style="width:240px"><col style="width:170px"><col style="width:130px">
               <col style="width:240px"><col style="width:120px">
-              <col style="width:140px"><col style="width:160px"><col style="width:120px">
+              <col style="width:140px"><col style="width:160px"><col style="width:160px"><col style="width:120px">
             </colgroup>
             <thead><tr>
               <th>${t('invitedUser.col.userId')}</th>
@@ -189,7 +190,8 @@
               <th>${t('invitedUser.col.inviter')}</th>
               <th class="text-center">${t('invitedUser.col.agentTier')}</th>
               <th class="text-right">${t('invitedUser.col.deposit')}</th>
-              <th class="text-right">${t('invitedUser.col.tradeVolume')}</th>
+              <th class="text-right">${t('invitedUser.col.openVolume')}</th>
+              <th class="text-right">${t('invitedUser.col.closeVolume')}</th>
               <th class="text-center">${t('invitedUser.col.actions')}</th>
             </tr></thead>
             <tbody>${rows}</tbody>

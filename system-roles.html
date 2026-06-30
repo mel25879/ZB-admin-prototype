@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.system-roles.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=16"></script>
+  <script src="assets/js/i18n.js?v=20"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     /* 登录守卫 */
@@ -247,7 +247,7 @@
                       ${r.status ? t('common.statusEnabled') : t('common.statusDisabled')}
                     </span>
                   </td>
-                  <td class="text-center">
+                  <td class="op-cell">
                     <button class="t-act" data-act="perm" data-id="${r.id}">${t('role.btnPerm')}</button>
                     <button class="t-act" data-act="edit" data-id="${r.id}">${t('common.edit')}</button>
                     <button class="t-act" data-act="toggle" data-id="${r.id}">${r.status ? t('common.disable') : t('common.enable')}</button>
@@ -464,23 +464,19 @@
           <div class="modal-content">
             <div class="form-grid">
               <div class="form-line">
-                <label>${t('role.field.codeLabel')} <span class="required">*</span></label>
-                <input type="text" id="fCode" placeholder="${t('role.field.codePlaceholder')}" maxlength="20" />
-              </div>
-              <div class="form-line">
-                <label>${t('sysUser.field.statusLabel')}</label>
-                <select id="fStatus">
-                  <option value="1" selected>${t('common.statusEnabled')}</option>
-                  <option value="0">${t('common.statusDisabled')}</option>
-                </select>
-              </div>
-              <div class="form-line">
                 <label>${t('role.field.nameZhLabel')} <span class="required">*</span></label>
                 <input type="text" id="fNameZh" placeholder="${t('role.field.nameZhLabel')}" maxlength="20" />
               </div>
               <div class="form-line">
                 <label>${t('role.field.nameEnLabel')} <span class="required">*</span></label>
                 <input type="text" id="fNameEn" placeholder="${t('role.field.nameEnLabel')}" maxlength="40" />
+              </div>
+              <div class="form-line full">
+                <label>${t('sysUser.field.statusLabel')}</label>
+                <select id="fStatus">
+                  <option value="1" selected>${t('common.statusEnabled')}</option>
+                  <option value="0">${t('common.statusDisabled')}</option>
+                </select>
               </div>
               <div class="form-line full">
                 <label>${t('role.field.parentLabel')}</label>
@@ -493,14 +489,6 @@
                   <span class="checkbox-text">${t('role.field.scopeLabel')}</span>
                 </label>
                 <p class="form-tip">${t('role.field.scopeTip')}</p>
-              </div>
-              <div class="form-line full">
-                <label>${t('role.field.descLabel')}</label>
-                <input type="text" id="fDescZh" placeholder="中文描述" maxlength="80" />
-              </div>
-              <div class="form-line full">
-                <label>${t('role.field.descLabel')} (EN)</label>
-                <input type="text" id="fDescEn" placeholder="English description" maxlength="120" />
               </div>
             </div>
           </div>
@@ -606,13 +594,9 @@
     function openRoleModal(role) {
       editingId = role ? role.id : null;
       document.getElementById('roleModalTitle').textContent = role ? t('role.modal.edit') : t('role.modal.add');
-      document.getElementById('fCode').value     = role ? role.code : '';
       document.getElementById('fNameZh').value   = role ? role.nameZh : '';
       document.getElementById('fNameEn').value   = role ? role.nameEn : '';
-      document.getElementById('fDescZh').value   = role ? role.descZh : '';
-      document.getElementById('fDescEn').value   = role ? role.descEn : '';
       document.getElementById('fStatus').value   = role ? String(role.status) : '1';
-      document.getElementById('fCode').disabled  = !!role; // 编辑时编码不可改
       // 层级权限复选框：勾选 = scopeType 'hierarchy'，不勾 = 'peer'（默认）
       document.getElementById('fScopeHierarchy').checked = !!(role && role.scopeType === 'hierarchy');
 
@@ -932,19 +916,14 @@
         el.addEventListener('click', () => closeModal('roleModal'));
       });
       document.getElementById('btnSaveRole').addEventListener('click', () => {
-        const code   = document.getElementById('fCode').value.trim();
         const nameZh = document.getElementById('fNameZh').value.trim();
         const nameEn = document.getElementById('fNameEn').value.trim();
-        const descZh = document.getElementById('fDescZh').value.trim();
-        const descEn = document.getElementById('fDescEn').value.trim();
         const status = parseInt(document.getElementById('fStatus').value, 10);
         const parentRaw = document.getElementById('fParent').value;
         const parentId  = parentRaw ? parseInt(parentRaw, 10) : null;
         // 权限作用域：勾选 'hierarchy'（仅可管理下属角色及其用户）；不勾 'peer'（默认平级）
         const scopeType = document.getElementById('fScopeHierarchy').checked ? 'hierarchy' : 'peer';
 
-        if (!code) return toast(t('role.val.codeRequired'), 'danger');
-        if (!/^[a-zA-Z0-9_]{3,20}$/.test(code)) return toast(t('role.val.codeFormat'), 'danger');
         if (!nameZh || !nameEn) return toast(t('role.val.nameRequired'), 'danger');
 
         // 防循环：编辑时双保险，确认 parentId 不是自己也不是自己的后代
@@ -955,14 +934,19 @@
         }
 
         if (editingId) {
+          // 编辑：仅更新可改字段，保留原 code/descZh/descEn
           const r = ROLES.find((x) => x.id === editingId);
-          Object.assign(r, { nameZh, nameEn, descZh, descEn, status, parentId, scopeType });
+          Object.assign(r, { nameZh, nameEn, status, parentId, scopeType });
           toast(t('role.toast.saved'), 'success');
         } else {
-          if (ROLES.some((x) => x.code === code)) return toast(t('role.val.codeExists', { n: code }), 'danger');
+          // 新增：code 由系统自动生成（保证唯一），描述置空字符串占位
+          const autoCode = 'role_' + Date.now().toString(36);
           ROLES.unshift({
             id: Date.now(),
-            code, nameZh, nameEn, descZh, descEn, status,
+            code: autoCode,
+            nameZh, nameEn,
+            descZh: '', descEn: '',
+            status,
             parentId, scopeType,
             userCount: 0,
             createdAt: new Date().toISOString().slice(0, 10),
