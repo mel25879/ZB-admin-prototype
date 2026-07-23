@@ -1,0 +1,1661 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>代理转账订单</title>
+  <link rel="stylesheet" href="assets/css/common.css?v=2">
+</head>
+<body data-title-key="page.orders-transfer.title">
+  <div id="app"></div>
+  <script src="assets/js/i18n.js?v=22"></script>
+  <script src="assets/js/common.js?v=2"></script>
+  <script>
+    // 登录守卫
+    (function () { try { if (localStorage.getItem('zb_admin_logged_in') !== '1') window.location.replace('login.html'); } catch (e) {} })();
+
+    /* ============================================================
+     * 转账订单（订单管理 · 财务审核）
+     * - 代理在代理后台点击"转账到交易账户" → 生成"待审核"订单
+     * - 财务在本页做审核：通过 → 代理端下次刷新会自动扣款；拒绝 → 代理端展示拒绝原因
+     * - 数据源：localStorage[zb_transfer_orders_v1]，与代理后台共享
+     * ============================================================ */
+
+    /* ============== Toast ============== */
+    function toast(msg, type) {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type || 'success'}`;
+      el.innerHTML = `<span class="toast-ico">${type === 'danger' ? '✕' : '✓'}</span>${msg}`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 2000);
+    }
+
+    /* ============== 格式化 ============== */
+    function fmtUSDT(v) {
+      return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+    }
+    function nowStr() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    /* ============== 数据模型 & 存储 ==============
+     * 转账订单（两阶段审核）：
+     * {
+     *   orderNo, withdrawalOrderNo, agentSid, agentEmail, agentTier, amount, applyTime,
+     *   auditStatus: 'initial_review' | 'final_review' | 'approved',
+     *   initialReviewer, initialReviewTime,   // 初审操作人 + 初审时间
+     *   finalReviewer,   finalReviewTime,     // 复审操作人 + 复审时间
+     * }
+     *
+     * 佣金/分成明细（与转账订单关联）：
+     * {
+     *   id, agentSid, agentEmail, agentTier,
+     *   type: 'commission' | 'share',         // 佣金 / 分成
+     *   direction: 'open' | 'close',          // 开仓 / 平仓
+     *   orderNo,                              // 用户的交易单号
+     *   userEmail, userSid,
+     *   tradeAmount, fee, amount,
+     *   shareRate,                            // 仅分成有值
+     *   fromAgentEmail,                       // 仅分成有值（下级代理邮箱）
+     *   createdAt,
+     *   transferOrderNo,                      // 关联的转账订单单号（null=未打包，代表还在可提现池里）
+     * }
+     */
+    const ORDERS_KEY = 'zb_transfer_orders_v4';
+    const COMMISSIONS_KEY = 'zb_commissions_v2';
+
+    /* ============== 审核操作人 ==============
+     * 不绑定指定角色：初审、复审的权限由系统角色配置控制。
+     * 原型中直接记录当前登录的后台账号，便于保留审核轨迹。
+     */
+    function getCurrentReviewer() {
+      return localStorage.getItem('zb_admin_account') || 'Admin';
+    }
+
+    // 首次进入若无数据，注入 15 条 mock（覆盖 3 种状态，横跨 L1/L2/L3）
+    // - 4 条 initial_review（待初审）—— 演示"初审通过"操作
+    // - 2 条 final_review（待复审）—— 演示"复审通过"操作
+    // - 9 条 approved（复审通过，含完整审核记录）
+    const DEFAULT_ORDERS = [
+      /* ═══════════ 待初审 · 4 条 ═══════════ */
+      {
+        orderNo: 'ITX1020260722120001', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        amount: 250.00, applyTime: '2026-07-22 09:12:45',
+        auditStatus: 'initial_review',
+        initialReviewer: null, initialReviewTime: null,
+        finalReviewer:   null, finalReviewTime:   null,
+      },
+      {
+        orderNo: 'ITX1020260722120002', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        amount: 1580.00, applyTime: '2026-07-22 10:34:22',
+        auditStatus: 'initial_review',
+        initialReviewer: null, initialReviewTime: null,
+        finalReviewer:   null, finalReviewTime:   null,
+      },
+      {
+        orderNo: 'ITX1020260722120003', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        amount: 120.50, applyTime: '2026-07-22 11:20:00',
+        auditStatus: 'initial_review',
+        initialReviewer: null, initialReviewTime: null,
+        finalReviewer:   null, finalReviewTime:   null,
+      },
+      {
+        orderNo: 'ITX1020260722120004', agentSid: 'S1008', agentEmail: 'lucas@gmail.com', agentTier: 'L3',
+        amount: 68.30, applyTime: '2026-07-22 13:05:11',
+        auditStatus: 'initial_review',
+        initialReviewer: null, initialReviewTime: null,
+        finalReviewer:   null, finalReviewTime:   null,
+      },
+
+      /* ═══════════ 待复审 · 2 条（初审已通过，等待复审）═══════════ */
+      {
+        orderNo: 'ITX1020260722120005', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        amount: 460.00, applyTime: '2026-07-22 14:47:03',
+        auditStatus: 'final_review',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-22 15:10:20',
+        finalReviewer:   null,        finalReviewTime:   null,
+      },
+      {
+        orderNo: 'ITX1020260722120006', agentSid: 'S1009', agentEmail: 'eva@163.com', agentTier: 'L3',
+        amount: 92.00, applyTime: '2026-07-22 16:22:18',
+        auditStatus: 'final_review',
+        initialReviewer: 'Chen', initialReviewTime: '2026-07-22 17:05:33',
+        finalReviewer:   null,        finalReviewTime:   null,
+      },
+
+      /* ═══════════ 复审通过 · 9 条（初审 + 复审都完成）═══════════ */
+      {
+        orderNo: 'ITX1020260720120010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        amount: 200.00, applyTime: '2026-07-20 10:15:00',
+        auditStatus: 'approved',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-20 10:45:12',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-20 11:02:15',
+      },
+      {
+        orderNo: 'ITX1020260719120011', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        amount: 380.00, applyTime: '2026-07-19 08:30:22',
+        auditStatus: 'approved',
+        initialReviewer: 'Chen', initialReviewTime: '2026-07-19 08:55:40',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-19 09:15:33',
+      },
+      {
+        orderNo: 'ITX1020260718120012', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        amount: 2000.00, applyTime: '2026-07-18 14:22:08',
+        auditStatus: 'approved',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-18 15:30:00',
+        finalReviewer:   'Zhao', finalReviewTime:   '2026-07-18 16:45:00',
+      },
+      {
+        orderNo: 'ITX1020260716120013', agentSid: 'S1008', agentEmail: 'lucas@gmail.com', agentTier: 'L3',
+        amount: 45.20, applyTime: '2026-07-16 20:22:08',
+        auditStatus: 'approved',
+        initialReviewer: 'Chen', initialReviewTime: '2026-07-16 21:00:15',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-17 09:05:00',
+      },
+      {
+        orderNo: 'ITX1020260715120014', agentSid: 'S1010', agentEmail: 'derek@gmail.com', agentTier: 'L3',
+        amount: 88.00, applyTime: '2026-07-15 11:33:44',
+        auditStatus: 'approved',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-15 12:05:22',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-15 14:20:00',
+      },
+      {
+        orderNo: 'ITX1020260710120015', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        amount: 730.00, applyTime: '2026-07-10 09:00:00',
+        auditStatus: 'approved',
+        initialReviewer: 'Chen', initialReviewTime: '2026-07-10 09:35:11',
+        finalReviewer:   'Zhao', finalReviewTime:   '2026-07-10 10:30:12',
+      },
+      {
+        orderNo: 'ITX1020260720120020', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        amount: 30.00, applyTime: '2026-07-20 16:18:55',
+        auditStatus: 'approved',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-20 16:35:20',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-20 17:00:00',
+      },
+      {
+        orderNo: 'ITX1020260718120021', agentSid: 'S1009', agentEmail: 'eva@163.com', agentTier: 'L3',
+        amount: 156.80, applyTime: '2026-07-18 20:11:30',
+        auditStatus: 'approved',
+        initialReviewer: 'Chen', initialReviewTime: '2026-07-19 08:45:00',
+        finalReviewer:   'Wendy', finalReviewTime:  '2026-07-19 09:22:15',
+      },
+      {
+        orderNo: 'ITX1020260716120022', agentSid: 'S1006', agentEmail: 'sara@gmail.com', agentTier: 'L2',
+        amount: 900.00, applyTime: '2026-07-16 22:35:00',
+        auditStatus: 'approved',
+        initialReviewer: 'Lina', initialReviewTime: '2026-07-17 09:20:44',
+        finalReviewer:   'Zhao', finalReviewTime:   '2026-07-17 10:40:20',
+      },
+    ];
+
+    // 兼容历史 mock：移除原先写入审核人名称中的角色前缀，避免页面继续展示固定审核角色。
+    function normalizeReviewerName(name) {
+      return typeof name === 'string' ? name.replace(/^(业务|财务)·/, '') : name;
+    }
+    // 原型中使用转账单号派生下游提现单号；实际接入时由下游系统返回并回写。
+    function getWithdrawalOrderNo(order) {
+      return order.withdrawalOrderNo || `WD${String(order.orderNo || '').replace(/^ITX/, '')}`;
+    }
+    function normalizeOrders(list) {
+      return list.map((order) => ({
+        ...order,
+        withdrawalOrderNo: getWithdrawalOrderNo(order),
+        initialReviewer: normalizeReviewerName(order.initialReviewer),
+        finalReviewer: normalizeReviewerName(order.finalReviewer),
+      }));
+    }
+    function loadOrders() {
+      try {
+        const d = JSON.parse(localStorage.getItem(ORDERS_KEY));
+        if (Array.isArray(d)) {
+          const normalized = normalizeOrders(d);
+          localStorage.setItem(ORDERS_KEY, JSON.stringify(normalized));
+          return normalized;
+        }
+      } catch (e) {}
+      // 首次注入并 persist
+      const defaults = normalizeOrders(DEFAULT_ORDERS);
+      localStorage.setItem(ORDERS_KEY, JSON.stringify(defaults));
+      return defaults;
+    }
+    function saveOrders(list) {
+      try { localStorage.setItem(ORDERS_KEY, JSON.stringify(list)); } catch (e) {}
+    }
+
+    /* ============== 佣金/分成明细 mock ==============
+     * 每笔转账订单关联 1-4 笔佣金明细，方便财务对账时能追溯"这笔转账由哪几笔佣金构成"。
+     * ⚠️ ITX1020260716120022 故意留 1 笔金额不一致（明细合计 895 ≠ 订单 900），用于演示"金额一致性校验"警报。
+     */
+    const DEFAULT_COMMISSIONS = [
+      /* ═══════════ pending 订单的关联明细 ═══════════ */
+
+      /* ── ITX...120001 (alice pending 250) → 3 笔合计 250 ── */
+      { id: 'CM260716001', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260716001', userEmail: 'jack@x.com', userSid: 'U2001',
+        tradeAmount: 4000, fee: 40, amount: 80,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-16 10:22:15', transferOrderNo: 'ITX1020260721120001' },
+      { id: 'CM260718001', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260718002', userEmail: 'lily@x.com', userSid: 'U2002',
+        tradeAmount: 3500, fee: 35, amount: 70,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-18 13:35:20', transferOrderNo: 'ITX1020260721120001' },
+      { id: 'CM260720001', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260720003', userEmail: 'peter@x.com', userSid: 'U2003',
+        tradeAmount: 10000, fee: 100, amount: 100,
+        shareRate: 50, fromAgentEmail: 'amy@163.com', fromAgentTier: 'L2',
+        createdAt: '2026-07-20 09:15:44', transferOrderNo: 'ITX1020260721120001' },
+
+      /* ── ITX...120002 (bob pending 1580) → 3 笔合计 1580 ── */
+      { id: 'CM260718020', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260718020', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 30000, fee: 300, amount: 600,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-18 10:00:00', transferOrderNo: 'ITX1020260721120002' },
+      { id: 'CM260719020', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260719021', userEmail: 'jerry@x.com', userSid: 'U2011',
+        tradeAmount: 24000, fee: 240, amount: 480,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-19 14:20:00', transferOrderNo: 'ITX1020260721120002' },
+      { id: 'CM260720020', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260720022', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 25000, fee: 250, amount: 500,
+        shareRate: 40, fromAgentEmail: 'sara@gmail.com', fromAgentTier: 'L2',
+        createdAt: '2026-07-20 16:33:00', transferOrderNo: 'ITX1020260721120002' },
+
+      /* ── ITX...120003 (amy pending 120.50) → 2 笔合计 120.50 ── */
+      { id: 'CM260719030', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260719030', userEmail: 'peter@x.com', userSid: 'U2003',
+        tradeAmount: 3525, fee: 35.25, amount: 70.50,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-19 16:15:00', transferOrderNo: 'ITX1020260721120003' },
+      { id: 'CM260720031', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260720031', userEmail: 'jack@x.com', userSid: 'U2001',
+        tradeAmount: 2500, fee: 25.00, amount: 50.00,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-20 09:50:00', transferOrderNo: 'ITX1020260721120003' },
+
+      /* ── ITX...120004 (lucas pending 68.30) → 2 笔合计 68.30 ── */
+      { id: 'CM260720040', agentSid: 'S1008', agentEmail: 'lucas@gmail.com', agentTier: 'L3',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260720040', userEmail: 'kate@x.com', userSid: 'U2004',
+        tradeAmount: 1665, fee: 16.65, amount: 33.30,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-20 15:22:08', transferOrderNo: 'ITX1020260721120004' },
+      { id: 'CM260721040', agentSid: 'S1008', agentEmail: 'lucas@gmail.com', agentTier: 'L3',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260721041', userEmail: 'tom@x.com', userSid: 'U2005',
+        tradeAmount: 1750, fee: 17.50, amount: 35.00,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-21 11:05:12', transferOrderNo: 'ITX1020260721120004' },
+
+      /* ── ITX...120005 (mary pending 460) → 3 笔合计 460 ── */
+      { id: 'CM260720050', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260720050', userEmail: 'nora@x.com', userSid: 'U2006',
+        tradeAmount: 7500, fee: 75, amount: 150,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-20 10:30:00', transferOrderNo: 'ITX1020260721120005' },
+      { id: 'CM260721050', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260721051', userEmail: 'jerry@x.com', userSid: 'U2011',
+        tradeAmount: 8000, fee: 80, amount: 160,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-21 09:45:00', transferOrderNo: 'ITX1020260721120005' },
+      { id: 'CM260721051', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260721052', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 15000, fee: 150, amount: 150,
+        shareRate: 50, fromAgentEmail: 'lucas@gmail.com', fromAgentTier: 'L3',
+        createdAt: '2026-07-21 12:10:00', transferOrderNo: 'ITX1020260721120005' },
+
+      /* ═══════════ approved 订单的关联明细 ═══════════ */
+
+      /* ── ITX...120010 (alice approved 200) → 4 笔合计 200 ── */
+      { id: 'CM260710010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260710010', userEmail: 'jack@x.com', userSid: 'U2001',
+        tradeAmount: 3000, fee: 30, amount: 60,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-10 10:15:30', transferOrderNo: 'ITX1020260720120010' },
+      { id: 'CM260712010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260712011', userEmail: 'lily@x.com', userSid: 'U2002',
+        tradeAmount: 2500, fee: 25, amount: 50,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-12 13:22:11', transferOrderNo: 'ITX1020260720120010' },
+      { id: 'CM260714010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260714012', userEmail: 'peter@x.com', userSid: 'U2003',
+        tradeAmount: 5000, fee: 50, amount: 50,
+        shareRate: 50, fromAgentEmail: 'amy@163.com', fromAgentTier: 'L2',
+        createdAt: '2026-07-14 15:40:20', transferOrderNo: 'ITX1020260720120010' },
+      { id: 'CM260716010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260716013', userEmail: 'kate@x.com', userSid: 'U2004',
+        tradeAmount: 2000, fee: 20, amount: 40,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-16 09:12:33', transferOrderNo: 'ITX1020260720120010' },
+
+      /* ── ITX...120011 (amy approved 380) → 3 笔合计 380 ── */
+      { id: 'CM260713011', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260713011', userEmail: 'peter@x.com', userSid: 'U2003',
+        tradeAmount: 6500, fee: 65, amount: 130,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-13 14:20:15', transferOrderNo: 'ITX1020260719120011' },
+      { id: 'CM260716011', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260716012', userEmail: 'jack@x.com', userSid: 'U2001',
+        tradeAmount: 7500, fee: 75, amount: 150,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-16 10:35:00', transferOrderNo: 'ITX1020260719120011' },
+      { id: 'CM260718011', agentSid: 'S1004', agentEmail: 'amy@163.com', agentTier: 'L2',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260718013', userEmail: 'lily@x.com', userSid: 'U2002',
+        tradeAmount: 5000, fee: 50, amount: 100,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-18 16:22:00', transferOrderNo: 'ITX1020260719120011' },
+
+      /* ── ITX...120012 (bob approved 2000) → 2 笔合计 2000 ── */
+      { id: 'CM260710012', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260710012', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 50000, fee: 500, amount: 1000,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-10 08:20:00', transferOrderNo: 'ITX1020260718120012' },
+      { id: 'CM260714012', agentSid: 'S1002', agentEmail: 'bob@outlook.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260714013', userEmail: 'jerry@x.com', userSid: 'U2011',
+        tradeAmount: 50000, fee: 500, amount: 1000,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-14 11:50:00', transferOrderNo: 'ITX1020260718120012' },
+
+      /* ── ITX...120013 (lucas approved 45.20) → 1 笔 45.20 ── */
+      { id: 'CM260712013', agentSid: 'S1008', agentEmail: 'lucas@gmail.com', agentTier: 'L3',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260712013', userEmail: 'kate@x.com', userSid: 'U2004',
+        tradeAmount: 2260, fee: 22.60, amount: 45.20,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-12 20:22:08', transferOrderNo: 'ITX1020260716120013' },
+
+      /* ── ITX...120014 (derek approved 88) → 2 笔合计 88 ── */
+      { id: 'CM260710014', agentSid: 'S1010', agentEmail: 'derek@gmail.com', agentTier: 'L3',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260710014', userEmail: 'nora@x.com', userSid: 'U2006',
+        tradeAmount: 2500, fee: 25, amount: 50,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-10 09:30:00', transferOrderNo: 'ITX1020260715120014' },
+      { id: 'CM260712014', agentSid: 'S1010', agentEmail: 'derek@gmail.com', agentTier: 'L3',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260712015', userEmail: 'tom@x.com', userSid: 'U2005',
+        tradeAmount: 1900, fee: 19, amount: 38,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-12 14:15:22', transferOrderNo: 'ITX1020260715120014' },
+
+      /* ── ITX...120015 (mary approved 730) → 3 笔合计 730 ── */
+      { id: 'CM260703015', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260703015', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 12500, fee: 125, amount: 250,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-03 10:00:00', transferOrderNo: 'ITX1020260710120015' },
+      { id: 'CM260706015', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260706016', userEmail: 'jerry@x.com', userSid: 'U2011',
+        tradeAmount: 14000, fee: 140, amount: 280,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-06 13:30:00', transferOrderNo: 'ITX1020260710120015' },
+      { id: 'CM260708015', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260708017', userEmail: 'kate@x.com', userSid: 'U2004',
+        tradeAmount: 20000, fee: 200, amount: 200,
+        shareRate: 50, fromAgentEmail: 'lucas@gmail.com', fromAgentTier: 'L3',
+        createdAt: '2026-07-08 15:45:12', transferOrderNo: 'ITX1020260710120015' },
+
+      /* ═══════════ rejected 订单的关联明细 ═══════════ */
+
+      /* ── ITX...120020 (alice rejected 30, 账户异常) → 1 笔 30 ── */
+      { id: 'CM260715020', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260715020', userEmail: 'nora@x.com', userSid: 'U2006',
+        tradeAmount: 1500, fee: 15, amount: 30,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-15 20:30:15', transferOrderNo: 'ITX1020260720120020' },
+
+      /* ── ITX...120021 (eva rejected 156.80, 身份过期) → 2 笔合计 156.80 ── */
+      { id: 'CM260713021', agentSid: 'S1009', agentEmail: 'eva@163.com', agentTier: 'L3',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260713021', userEmail: 'jack@x.com', userSid: 'U2001',
+        tradeAmount: 4340, fee: 43.40, amount: 86.80,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-13 11:22:00', transferOrderNo: 'ITX1020260718120021' },
+      { id: 'CM260715021', agentSid: 'S1009', agentEmail: 'eva@163.com', agentTier: 'L3',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260715022', userEmail: 'lily@x.com', userSid: 'U2002',
+        tradeAmount: 3500, fee: 35, amount: 70,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-15 14:05:33', transferOrderNo: 'ITX1020260718120021' },
+
+      /* ── ITX...120022 (sara rejected 900, 频次超限) → 3 笔合计 895 (❌ 故意留 5 USDT 差异，演示金额不一致警报) ── */
+      { id: 'CM260712022', agentSid: 'S1006', agentEmail: 'sara@gmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260712022', userEmail: 'peter@x.com', userSid: 'U2003',
+        tradeAmount: 15000, fee: 150, amount: 300,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-12 09:00:00', transferOrderNo: 'ITX1020260716120022' },
+      { id: 'CM260714022', agentSid: 'S1006', agentEmail: 'sara@gmail.com', agentTier: 'L2',
+        type: 'commission', direction: 'open',
+        orderNo: 'TR20260714023', userEmail: 'zoe@x.com', userSid: 'U2010',
+        tradeAmount: 15000, fee: 150, amount: 300,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-14 15:30:00', transferOrderNo: 'ITX1020260716120022' },
+      { id: 'CM260715022', agentSid: 'S1006', agentEmail: 'sara@gmail.com', agentTier: 'L2',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260715024', userEmail: 'jerry@x.com', userSid: 'U2011',
+        tradeAmount: 29500, fee: 295, amount: 295,
+        shareRate: 50, fromAgentEmail: 'derek@gmail.com', fromAgentTier: 'L3',
+        createdAt: '2026-07-15 20:11:00', transferOrderNo: 'ITX1020260716120022' },
+
+      /* ── ITX...120023 (cathy rejected 320, 下级异常) → 2 笔合计 320 ── */
+      { id: 'CM260710023', agentSid: 'S1007', agentEmail: 'cathy@qq.com', agentTier: 'L2',
+        type: 'commission', direction: 'close',
+        orderNo: 'TR20260710023', userEmail: 'kate@x.com', userSid: 'U2004',
+        tradeAmount: 8000, fee: 80, amount: 160,
+        shareRate: null, fromAgentEmail: null,
+        createdAt: '2026-07-10 10:00:00', transferOrderNo: 'ITX1020260714120023' },
+      { id: 'CM260713023', agentSid: 'S1007', agentEmail: 'cathy@qq.com', agentTier: 'L2',
+        type: 'share', direction: 'close',
+        orderNo: 'TR20260713024', userEmail: 'tom@x.com', userSid: 'U2005',
+        tradeAmount: 16000, fee: 160, amount: 160,
+        shareRate: 50, fromAgentEmail: 'lucas@gmail.com', fromAgentTier: 'L3',
+        createdAt: '2026-07-13 13:22:00', transferOrderNo: 'ITX1020260714120023' },
+    ];
+
+    function loadCommissions() {
+      try {
+        const d = JSON.parse(localStorage.getItem(COMMISSIONS_KEY));
+        if (Array.isArray(d)) return d;
+      } catch (e) {}
+      localStorage.setItem(COMMISSIONS_KEY, JSON.stringify(DEFAULT_COMMISSIONS));
+      return DEFAULT_COMMISSIONS.slice();
+    }
+    // 通过转账单号反查关联的佣金/分成明细
+    function getCommissionsByTransferOrder(orderNo) {
+      return loadCommissions()
+        .filter((c) => c.transferOrderNo === orderNo)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    }
+
+    let ORDERS = loadOrders();
+
+    /* ============== 筛选状态 ============== */
+    const filterState = {
+      orderNo: '',
+      withdrawalOrderNo: '',
+      email: '',
+      status: '',   // '' | 'pending' | 'approved' | 'rejected'
+      startDate: '',
+      endDate: '',
+    };
+
+    /* ============== 状态 / 等级 tag（待初审 / 待复审 / 复审通过）============== */
+    function auditStatusTag(status) {
+      const map = {
+        initial_review: { cls: 'st-initial', key: 'ordersTransfer.status.initialReview' },
+        final_review:   { cls: 'st-final',   key: 'ordersTransfer.status.finalReview'   },
+        approved:       { cls: 'st-approved',key: 'ordersTransfer.status.approved'      },
+      };
+      const info = map[status] || map.initial_review;
+      return `<span class="audit-tag ${info.cls}">${t(info.key)}</span>`;
+    }
+    function tierTag(tier) {
+      return `<span class="tier-tag tier-${tier.toLowerCase()}">${tier}</span>`;
+    }
+
+    /* ============== 筛选执行 ============== */
+    function getFilteredOrders() {
+      return ORDERS.filter((o) => {
+        if (filterState.orderNo && !o.orderNo.toLowerCase().includes(filterState.orderNo.toLowerCase())) return false;
+        if (filterState.withdrawalOrderNo && !o.withdrawalOrderNo.toLowerCase().includes(filterState.withdrawalOrderNo.toLowerCase())) return false;
+        if (filterState.email && !o.agentEmail.toLowerCase().includes(filterState.email.toLowerCase())) return false;
+        if (filterState.status && o.auditStatus !== filterState.status) return false;
+        if (filterState.startDate && o.applyTime < filterState.startDate) return false;
+        if (filterState.endDate && o.applyTime > filterState.endDate + ' 23:59:59') return false;
+        return true;
+      }).sort((a, b) => b.applyTime.localeCompare(a.applyTime));  // 按申请时间倒序
+    }
+
+    /* ============== 表格行渲染（初审 / 复审两阶段流程）============== */
+    function renderRow(o) {
+      const initReviewer  = o.initialReviewer || '<span class="muted">-</span>';
+      const finalReviewer = o.finalReviewer   || '<span class="muted">-</span>';
+      const initReviewTime  = o.initialReviewTime || '<span class="muted">-</span>';
+      const finalReviewTime = o.finalReviewTime   || '<span class="muted">-</span>';
+      let actionBtn;
+      if (o.auditStatus === 'initial_review') {
+        actionBtn = `<button class="t-act t-approve" data-act="initial-approve" data-order="${o.orderNo}">${t('ordersTransfer.btn.initialApprove')}</button>`;
+      } else if (o.auditStatus === 'final_review') {
+        actionBtn = `<button class="t-act t-approve" data-act="final-approve" data-order="${o.orderNo}">${t('ordersTransfer.btn.finalApprove')}</button>`;
+      } else {
+        actionBtn = '';
+      }
+      return `
+        <tr data-order="${o.orderNo}">
+          <td class="mono">${o.orderNo}</td>
+          <td class="mono">${o.withdrawalOrderNo}</td>
+          <td><span class="link-text">${o.agentEmail}</span></td>
+          <td class="mono">${o.agentSid}</td>
+          <td>${tierTag(o.agentTier)}</td>
+          <td class="text-right num strong">${fmtUSDT(o.amount)}</td>
+          <td class="muted">${o.applyTime}</td>
+          <td class="text-center">${auditStatusTag(o.auditStatus)}</td>
+          <td>${initReviewer}</td>
+          <td class="muted">${initReviewTime}</td>
+          <td>${finalReviewer}</td>
+          <td class="muted">${finalReviewTime}</td>
+          <td class="op-cell">
+            ${actionBtn}
+            <button class="t-act" data-act="detail" data-order="${o.orderNo}">${t('ordersTransfer.btn.detail')}</button>
+          </td>
+        </tr>
+      `;
+    }
+
+    function renderTable() {
+      const list = getFilteredOrders();
+      const rows = list.length
+        ? list.map(renderRow).join('')
+        : `<tr class="empty-row"><td colspan="13"><div class="empty-cell">${t('ordersTransfer.empty')}</div></td></tr>`;
+      return `
+        <!-- 表格 -->
+        <div class="table-wrap">
+          <table class="data-table biz-table">
+            <thead>
+              <tr>
+                <th>${t('ordersTransfer.col.orderNo')}</th>
+                <th>${t('ordersTransfer.col.withdrawalOrderNo')}</th>
+                <th>${t('ordersTransfer.col.agentEmail')}</th>
+                <th>${t('ordersTransfer.col.agentSid')}</th>
+                <th>${t('ordersTransfer.col.agentTier')}</th>
+                <th class="text-right">${t('ordersTransfer.col.amount')}</th>
+                <th>${t('ordersTransfer.col.applyTime')}</th>
+                <th class="text-center">${t('ordersTransfer.col.auditStatus')}</th>
+                <th>${t('ordersTransfer.col.initialReviewer')}</th>
+                <th>${t('ordersTransfer.col.initialReviewTime')}</th>
+                <th>${t('ordersTransfer.col.finalReviewer')}</th>
+                <th>${t('ordersTransfer.col.finalReviewTime')}</th>
+                <th class="text-center">${t('ordersTransfer.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /* ============== 页面主内容 ============== */
+    const PAGE_CONTENT = `
+      <div class="page-header">
+        <h1 class="page-title">${t('page.orders-transfer.title')}</h1>
+      </div>
+
+      <!-- 筛选区 -->
+      <div class="filter-bar">
+        <div class="filter-row">
+          <div class="filter-item">
+            <label>${t('ordersTransfer.filter.orderNo')}</label>
+            <input type="text" id="fOrderNo" placeholder="${t('ordersTransfer.filter.placeholder.orderNo')}" />
+          </div>
+          <div class="filter-item">
+            <label>${t('ordersTransfer.filter.withdrawalOrderNo')}</label>
+            <input type="text" id="fWithdrawalOrderNo" placeholder="${t('ordersTransfer.filter.placeholder.withdrawalOrderNo')}" />
+          </div>
+          <div class="filter-item">
+            <label>${t('ordersTransfer.filter.email')}</label>
+            <input type="text" id="fEmail" placeholder="${t('ordersTransfer.filter.placeholder.email')}" />
+          </div>
+          <div class="filter-item">
+            <label>${t('ordersTransfer.filter.status')}</label>
+            <select id="fStatus">
+              <option value="">${t('ordersTransfer.filter.all')}</option>
+              <option value="initial_review">${t('ordersTransfer.status.initialReview')}</option>
+              <option value="final_review">${t('ordersTransfer.status.finalReview')}</option>
+              <option value="approved">${t('ordersTransfer.status.approved')}</option>
+            </select>
+          </div>
+          <div class="filter-item filter-item-date">
+            <label>${t('ordersTransfer.filter.timeRange')}</label>
+            <div class="date-range">
+              <input type="date" id="fStartDate" />
+              <span class="date-sep">~</span>
+              <input type="date" id="fEndDate" />
+            </div>
+          </div>
+          <div class="filter-btns">
+            <button class="btn-outline" id="btnExport">${t('ordersTransfer.btn.exportAll')}</button>
+            <button class="btn-outline" id="btnReset">${t('ordersTransfer.btn.reset')}</button>
+            <button class="btn-primary" id="btnQuery">${t('ordersTransfer.btn.query')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 表格容器（动态刷新） -->
+      <div id="tableContainer">${renderTable()}</div>
+
+      <!-- 审核通过弹窗（初审 / 复审共用；动态标题+提示） -->
+      <div class="modal" id="approveModal">
+        <div class="modal-mask" data-act="close-approve"></div>
+        <div class="modal-body confirm-modal">
+          <div class="modal-head">
+            <h3 id="approveTitle">${t('ordersTransfer.modal.initialTitle')}</h3>
+            <button class="modal-close" data-act="close-approve">✕</button>
+          </div>
+          <div class="modal-content">
+            <p class="confirm-tip" id="approveTip">${t('ordersTransfer.modal.initialTip')}</p>
+            <div class="order-summary" id="approveSummary"></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" data-act="close-approve">${t('common.cancel')}</button>
+            <button class="btn-primary" id="btnConfirmApprove">${t('ordersTransfer.btn.confirm')}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 订单详情弹窗（含关联佣金/分成明细） -->
+      <div class="modal" id="detailModal">
+        <div class="modal-mask" data-act="close-detail"></div>
+        <div class="modal-body confirm-modal" style="width:920px; max-width:95vw;">
+          <div class="modal-head">
+            <h3>${t('ordersTransfer.modal.detailTitle')}</h3>
+            <button class="modal-close" data-act="close-detail">✕</button>
+          </div>
+          <div class="modal-content" style="max-height:70vh; overflow:auto;">
+            <div class="detail-grid" id="detailContent"></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-outline" id="btnExportSingle">${t('ordersTransfer.btn.exportSingle')}</button>
+            <button class="btn-primary" data-act="close-detail">${t('common.confirm') || 'OK'}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    /* ============== 弹窗工具 ============== */
+    function openModal(id)  { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+    function findOrder(orderNo) { return ORDERS.find((o) => o.orderNo === orderNo); }
+    function summaryHtml(o) {
+      return `
+        <div class="sm-row"><span class="sm-k">${t('ordersTransfer.col.orderNo')}</span><span class="sm-v mono">${o.orderNo}</span></div>
+        <div class="sm-row"><span class="sm-k">${t('ordersTransfer.col.agentEmail')}</span><span class="sm-v">${o.agentEmail}</span></div>
+        <div class="sm-row"><span class="sm-k">${t('ordersTransfer.col.amount')}</span><span class="sm-v strong">${fmtUSDT(o.amount)}</span></div>
+      `;
+    }
+    /* 派生：单条明细的"交易时间"（原型模拟：结算时间 = 交易时间 + 45 分钟）*/
+    function getItemTradeTime(c) {
+      if (c.tradeTime) return c.tradeTime;
+      const d = new Date(c.createdAt);
+      d.setMinutes(d.getMinutes() - 45);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function detailHtml(o) {
+      const commissions = getCommissionsByTransferOrder(o.orderNo);
+      const commSum = commissions.reduce((s, c) => s + Number(c.amount), 0);
+
+      /* 按类型拆分 */
+      const commList  = commissions.filter((c) => c.type === 'commission');
+      const shareList = commissions.filter((c) => c.type === 'share');
+      const commListSum  = commList.reduce((s, c) => s + Number(c.amount), 0);
+      const shareListSum = shareList.reduce((s, c) => s + Number(c.amount), 0);
+
+      /* 金额一致性校验（合计 = 转账订单金额）*/
+      const consistency = commSum.toFixed(2) === Number(o.amount).toFixed(2)
+        ? `<span class="check-ok">✓ ${t('ordersTransfer.detail.amountMatch')}</span>`
+        : `<span class="check-fail">✕ ${t('ordersTransfer.detail.amountMismatch', { sum: fmtUSDT(commSum) })}</span>`;
+
+      /* 佣金明细行（无溯源信息，因为是自己直接邀请）*/
+      const commRows = commList.length
+        ? commList.map((c, idx) => `
+            <tr>
+              <td class="text-center muted">${idx + 1}</td>
+              <td>${dirTag(c.direction)}</td>
+              <td class="mono">${c.orderNo}</td>
+              <td><span class="link-text">${c.userEmail}</span><div class="sub-info mono">${c.userSid}</div></td>
+              <td class="text-right num">${fmtUSDT(c.tradeAmount)}</td>
+              <td class="text-right num">${fmtUSDT(c.fee)}</td>
+              <td class="text-center rate-cell">${getCommissionRate(c)}%</td>
+              <td class="text-right num strong">${fmtUSDT(c.amount)}</td>
+              <td class="muted">${getItemTradeTime(c)}</td>
+              <td class="muted">${c.createdAt}</td>
+            </tr>
+          `).join('')
+        : `<tr><td colspan="10" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noCommission')}</td></tr>`;
+
+      /* 分成明细行（含溯源信息：交易用户 + 下级代理 + 代理等级 + 分成比例）*/
+      const shareRows = shareList.length
+        ? shareList.map((c, idx) => `
+            <tr>
+              <td class="text-center muted">${idx + 1}</td>
+              <td>${dirTag(c.direction)}</td>
+              <td class="mono">${c.orderNo}</td>
+              <td>
+                <span class="link-text">${c.userEmail}</span>
+                <div class="sub-info mono">${c.userSid}</div>
+              </td>
+              <td class="trace-cell">
+                <span class="link-text">${c.fromAgentEmail || '-'}</span>
+                ${c.fromAgentTier ? tierTag(c.fromAgentTier) : ''}
+              </td>
+              <td class="text-right num">${fmtUSDT(c.tradeAmount)}</td>
+              <td class="text-right num">${fmtUSDT(c.fee)}</td>
+              <td class="text-center">${c.shareRate != null ? c.shareRate + '%' : '-'}</td>
+              <td class="text-right num strong">${fmtUSDT(c.amount)}</td>
+              <td class="muted">${getItemTradeTime(c)}</td>
+              <td class="muted">${c.createdAt}</td>
+            </tr>
+          `).join('')
+        : `<tr><td colspan="11" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noShare')}</td></tr>`;
+
+      return `
+        <!-- 顶部：金额 hero 卡片 + 状态 tag -->
+        <div class="detail-hero">
+          <div class="hero-left">
+            <div class="hero-label">${t('ordersTransfer.col.amount')}</div>
+            <div class="hero-amount">${fmtUSDT(o.amount)}</div>
+            <div class="hero-order">
+              <span class="hero-order-k">${t('ordersTransfer.col.orderNo')}</span>
+              <span class="hero-order-v mono">${o.orderNo}</span>
+            </div>
+          </div>
+          <div class="hero-right">
+            ${auditStatusTag(o.auditStatus)}
+            ${commissions.length ? `<div class="hero-consistency">${consistency}</div>` : ''}
+          </div>
+        </div>
+
+        <!-- 中间：3 列紧凑信息网格 -->
+        <div class="info-grid">
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.agentEmail')}</div>
+            <div class="info-v">${o.agentEmail}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.agentSid')}</div>
+            <div class="info-v mono">${o.agentSid}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.agentTier')}</div>
+            <div class="info-v">${tierTag(o.agentTier)}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.applyTime')}</div>
+            <div class="info-v">${o.applyTime}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.initialReviewer')}</div>
+            <div class="info-v">${o.initialReviewer || '-'}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.initialReviewTime')}</div>
+            <div class="info-v">${o.initialReviewTime || '-'}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.finalReviewer')}</div>
+            <div class="info-v">${o.finalReviewer || '-'}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-k">${t('ordersTransfer.col.finalReviewTime')}</div>
+            <div class="info-v">${o.finalReviewTime || '-'}</div>
+          </div>
+        </div>
+
+        <!-- 佣金明细（代理直邀用户产生） -->
+        <div class="detail-section">
+          <div class="detail-section-title">
+            ${t('ordersTransfer.detail.commList')}
+            <span class="detail-sum">${t('ordersTransfer.detail.commSum', { n: commList.length, sum: fmtUSDT(commListSum) })}</span>
+          </div>
+          <div class="detail-table-wrap">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th class="text-center" style="width:36px;">#</th>
+                  <th>${t('ordersTransfer.detail.col.direction')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeOrderNo')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeUser')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.tradeAmount')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.fee')}</th>
+                  <th class="text-center">${t('ordersTransfer.detail.col.commissionRate')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.amountCommission')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeTime')}</th>
+                  <th>${t('ordersTransfer.detail.col.createdAt')}</th>
+                </tr>
+              </thead>
+              <tbody>${commRows}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 分成明细（下级代理带来的用户产生，含溯源信息） -->
+        <div class="detail-section">
+          <div class="detail-section-title">
+            ${t('ordersTransfer.detail.shareList')}
+            <span class="detail-sum">${t('ordersTransfer.detail.shareSum', { n: shareList.length, sum: fmtUSDT(shareListSum) })}</span>
+          </div>
+          <div class="detail-table-wrap">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th class="text-center" style="width:36px;">#</th>
+                  <th>${t('ordersTransfer.detail.col.direction')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeOrderNo')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeUser')}</th>
+                  <th>${t('ordersTransfer.detail.col.subAgent')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.tradeAmount')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.fee')}</th>
+                  <th class="text-center">${t('ordersTransfer.detail.col.shareRate')}</th>
+                  <th class="text-right">${t('ordersTransfer.detail.col.amountShare')}</th>
+                  <th>${t('ordersTransfer.detail.col.tradeTime')}</th>
+                  <th>${t('ordersTransfer.detail.col.createdAt')}</th>
+                </tr>
+              </thead>
+              <tbody>${shareRows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    /* 派生：一条明细的返佣比例
+     * - 若 mock 记录里显式指定了 commissionRate → 用它
+     * - 佣金：按代理等级默认（L1 60% / L2 40% / L3 20%）
+     * - 分成：直接用 shareRate
+     */
+    function getCommissionRate(c) {
+      if (c.commissionRate != null) return c.commissionRate;
+      if (c.type === 'commission') {
+        const rateByTier = { L1: 60, L2: 40, L3: 20 };
+        return rateByTier[c.agentTier] || 40;
+      }
+      return c.shareRate || 0;
+    }
+
+    /* 明细类型 / 方向 tag */
+    function commTypeTag(type) {
+      const map = {
+        commission: { cls: 'ct-comm',  key: 'ordersTransfer.detail.type.commission' },
+        share:      { cls: 'ct-share', key: 'ordersTransfer.detail.type.share' },
+      };
+      const info = map[type] || map.commission;
+      return `<span class="ct-tag ${info.cls}">${t(info.key)}</span>`;
+    }
+    function dirTag(dir) {
+      const map = {
+        open:  { cls: 'dir-open',  key: 'ordersTransfer.detail.dir.open' },
+        close: { cls: 'dir-close', key: 'ordersTransfer.detail.dir.close' },
+      };
+      const info = map[dir] || map.open;
+      return `<span class="dir-tag ${info.cls}">${t(info.key)}</span>`;
+    }
+
+    /* ============== 刷新视图 ============== */
+    function refresh() {
+      document.getElementById('tableContainer').innerHTML = renderTable();
+      bindRowActions();
+    }
+
+    /* ============== 绑定行内按钮 ============== */
+    let currentEditOrderNo = null;
+    let currentReviewStage = null;  // 'initial' | 'final'
+    function bindRowActions() {
+      // 初审通过按钮
+      document.querySelectorAll('[data-act="initial-approve"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const orderNo = btn.dataset.order;
+          const o = findOrder(orderNo);
+          if (!o || o.auditStatus !== 'initial_review') return toast(t('ordersTransfer.toast.notInitial'), 'danger');
+          currentEditOrderNo = orderNo;
+          currentReviewStage = 'initial';
+          document.getElementById('approveTitle').textContent = t('ordersTransfer.modal.initialTitle');
+          document.getElementById('approveTip').textContent   = t('ordersTransfer.modal.initialTip');
+          document.getElementById('approveSummary').innerHTML = summaryHtml(o);
+          openModal('approveModal');
+        });
+      });
+      // 复审通过按钮
+      document.querySelectorAll('[data-act="final-approve"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const orderNo = btn.dataset.order;
+          const o = findOrder(orderNo);
+          if (!o || o.auditStatus !== 'final_review') return toast(t('ordersTransfer.toast.notFinal'), 'danger');
+          currentEditOrderNo = orderNo;
+          currentReviewStage = 'final';
+          document.getElementById('approveTitle').textContent = t('ordersTransfer.modal.finalTitle');
+          document.getElementById('approveTip').textContent   = t('ordersTransfer.modal.finalTip');
+          document.getElementById('approveSummary').innerHTML = summaryHtml(o);
+          openModal('approveModal');
+        });
+      });
+      document.querySelectorAll('[data-act="detail"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const orderNo = btn.dataset.order;
+          const o = findOrder(orderNo);
+          if (!o) return;
+          currentEditOrderNo = orderNo;
+          document.getElementById('detailContent').innerHTML = detailHtml(o);
+          openModal('detailModal');
+        });
+      });
+    }
+
+    /* ============== Lark 通知（系统自动触发）==============
+     * 触发时机：复审通过后自动调用
+     * 呈现方式：右下角滑出 Lark 风格通知卡片，展示会推送的内容
+     * 生产实现：把 payload 通过 fetch POST 到 Lark 群机器人 webhook 即可
+     */
+    const NOTIFY_TARGET = '财务审核群';  // 演示用，实际由配置提供
+
+    function pushLarkNotification(order, action) {
+      // action: 目前仅 'approved'（当前流程只支持两阶段通过）
+      const payload = buildLarkPayload(order, action);
+      // 生产环境这里会：fetch(WEBHOOK_URL, { method: 'POST', body: JSON.stringify(payload) })
+      // 原型层面：只做视觉呈现
+      showLarkNotifyCard(payload);
+    }
+
+    function buildLarkPayload(order, action) {
+      const title = '【复审通过】代理转账订单审核完成';
+      const lines = [
+        { k: '转账单号', v: order.orderNo, mono: true },
+        { k: '代理邮箱', v: order.agentEmail },
+        { k: '代理UID',  v: order.agentSid, mono: true },
+        { k: '代理等级', v: order.agentTier },
+        { k: '转账金额', v: fmtUSDT(order.amount), strong: true },
+        { k: '复审操作人', v: order.finalReviewer || 'Admin' },
+        { k: '复审时间',   v: order.finalReviewTime || nowStr() },
+      ];
+      return { title, target: NOTIFY_TARGET, lines, action };
+    }
+
+    function showLarkNotifyCard(payload) {
+      const card = document.createElement('div');
+      card.className = 'lark-notify lark-notify-ok';
+      card.innerHTML = `
+        <div class="lark-notify-head">
+          <span class="lark-notify-brand">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M3 8l9 6 9-6" stroke="currentColor" stroke-width="1.6" fill="none"/>
+            </svg>
+            Lark 通知已推送
+          </span>
+          <button class="lark-notify-close" title="关闭">✕</button>
+        </div>
+        <div class="lark-notify-target">→ ${payload.target}</div>
+        <div class="lark-notify-body">
+          <div class="lark-notify-title">${payload.title}</div>
+          <div class="lark-notify-lines">
+            ${payload.lines.map((l) => `
+              <div class="lark-line ${l.alert ? 'alert' : ''}">
+                <span class="lark-k">${l.k}</span>
+                <span class="lark-v ${l.mono ? 'mono' : ''} ${l.strong ? 'strong' : ''}">${l.v}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+      document.body.appendChild(card);
+      // 触发入场动画
+      requestAnimationFrame(() => card.classList.add('show'));
+      // 关闭
+      const closeIt = () => {
+        card.classList.remove('show');
+        setTimeout(() => card.remove(), 300);
+      };
+      card.querySelector('.lark-notify-close').addEventListener('click', closeIt);
+      // 5 秒后自动消失
+      setTimeout(closeIt, 5000);
+    }
+
+    /* ============== 导出 CSV（对账友好：转账信息 + 关联佣金明细"扁平化"）==============
+     * 每一行 = 一笔佣金/分成明细，前面若干列重复填充所属转账订单信息；
+     * 如果转账订单无关联明细（如刚创建的），也占 1 行以便追溯。
+     */
+    const EXPORT_HEADERS = [
+      '转账单号', '代理邮箱', '代理UID', '代理等级', '转账金额(USDT)',
+      '转账申请时间', '审核状态',
+      '初审人', '初审时间', '复审人', '复审时间',
+      '明细序号', '明细类型', '交易方向', '交易单号',
+      '用户邮箱', '用户UID', '交易额(USDT)', '手续费(USDT)',
+      '返佣比例', '分成比例', '分成来源代理', '佣金/分成金额(USDT)', '明细结算时间',
+    ];
+    const STATUS_LABEL = { initial_review: '待初审', final_review: '待复审', approved: '复审通过' };
+    const TYPE_LABEL   = { commission: '佣金', share: '分成' };
+    const DIR_LABEL    = { open: '开仓', close: '平仓' };
+
+    function csvEscape(v) {
+      if (v == null) return '';
+      const s = String(v);
+      // 含逗号/引号/换行需要用引号包围，且内部引号转义为两个引号
+      if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }
+
+    function buildRowsForOrder(o) {
+      const commissions = getCommissionsByTransferOrder(o.orderNo);
+      const orderCols = [
+        o.orderNo, o.agentEmail, o.agentSid, o.agentTier, Number(o.amount).toFixed(2),
+        o.applyTime, STATUS_LABEL[o.auditStatus] || o.auditStatus,
+        o.initialReviewer || '', o.initialReviewTime || '',
+        o.finalReviewer   || '', o.finalReviewTime   || '',
+      ];
+      if (!commissions.length) {
+        // 没关联明细也占 1 行（明细列留空）
+        return [orderCols.concat(['', '', '', '', '', '', '', '', '', '', '', '', ''])];
+      }
+      return commissions.map((c, idx) => orderCols.concat([
+        idx + 1,
+        TYPE_LABEL[c.type] || c.type,
+        DIR_LABEL[c.direction] || c.direction,
+        c.orderNo, c.userEmail, c.userSid,
+        Number(c.tradeAmount).toFixed(2), Number(c.fee).toFixed(2),
+        getCommissionRate(c) + '%',
+        c.shareRate != null ? (c.shareRate + '%') : '',
+        c.fromAgentEmail || '',
+        Number(c.amount).toFixed(2), c.createdAt,
+      ]));
+    }
+
+    function exportToCsv(orders, filename) {
+      const rows = [EXPORT_HEADERS];
+      orders.forEach((o) => { buildRowsForOrder(o).forEach((r) => rows.push(r)); });
+      const csv = rows.map((r) => r.map(csvEscape).join(',')).join('\r\n');
+      // BOM，Excel 打开中文不乱码
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function nowFileTag() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    }
+
+    /* ============== 页面初始化 ============== */
+    window.onPageReady = function () {
+      // 筛选交互
+      document.getElementById('btnQuery').addEventListener('click', () => {
+        filterState.orderNo   = document.getElementById('fOrderNo').value.trim();
+        filterState.withdrawalOrderNo = document.getElementById('fWithdrawalOrderNo').value.trim();
+        filterState.email     = document.getElementById('fEmail').value.trim();
+        filterState.status    = document.getElementById('fStatus').value;
+        filterState.startDate = document.getElementById('fStartDate').value;
+        filterState.endDate   = document.getElementById('fEndDate').value;
+        refresh();
+      });
+      document.getElementById('btnReset').addEventListener('click', () => {
+        document.getElementById('fOrderNo').value = '';
+        document.getElementById('fWithdrawalOrderNo').value = '';
+        document.getElementById('fEmail').value = '';
+        document.getElementById('fStatus').value = '';
+        document.getElementById('fStartDate').value = '';
+        document.getElementById('fEndDate').value = '';
+        filterState.orderNo = ''; filterState.withdrawalOrderNo = ''; filterState.email = ''; filterState.status = '';
+        filterState.startDate = ''; filterState.endDate = '';
+        refresh();
+      });
+
+      // 弹窗关闭
+      document.querySelectorAll('[data-act="close-approve"]').forEach((el) => el.addEventListener('click', () => closeModal('approveModal')));
+      document.querySelectorAll('[data-act="close-detail"]').forEach((el) => el.addEventListener('click', () => closeModal('detailModal')));
+
+      // 审核通过（初审 / 复审共用同一个 handler，根据 currentReviewStage 分流）
+      // 注：Lark 通知的触发节点已从"审核通过后"改为"代理发起转账时"（在代理后台侧触发）
+      document.getElementById('btnConfirmApprove').addEventListener('click', () => {
+        const o = findOrder(currentEditOrderNo);
+        if (!o) { closeModal('approveModal'); return; }
+
+        if (currentReviewStage === 'initial') {
+          if (o.auditStatus !== 'initial_review') {
+            closeModal('approveModal');
+            return toast(t('ordersTransfer.toast.notInitial'), 'danger');
+          }
+          o.auditStatus        = 'final_review';
+          o.initialReviewer    = getCurrentReviewer();
+          o.initialReviewTime  = nowStr();
+          saveOrders(ORDERS);
+          closeModal('approveModal');
+          toast(t('ordersTransfer.toast.initialApproved'), 'success');
+        } else if (currentReviewStage === 'final') {
+          if (o.auditStatus !== 'final_review') {
+            closeModal('approveModal');
+            return toast(t('ordersTransfer.toast.notFinal'), 'danger');
+          }
+          o.auditStatus     = 'approved';
+          o.finalReviewer   = getCurrentReviewer();
+          o.finalReviewTime = nowStr();
+          saveOrders(ORDERS);
+          closeModal('approveModal');
+          toast(t('ordersTransfer.toast.finalApproved'), 'success');
+        }
+        refresh();
+      });
+
+      // 导出（当前筛选结果的所有订单）
+      document.getElementById('btnExport').addEventListener('click', () => {
+        const list = getFilteredOrders();
+        if (!list.length) return toast(t('ordersTransfer.toast.nothingToExport'), 'danger');
+        exportToCsv(list, `代理转账订单对账_${nowFileTag()}.csv`);
+        toast(t('ordersTransfer.toast.exported', { n: list.length }), 'success');
+      });
+
+      // 导出（详情弹窗内当前订单）
+      document.getElementById('btnExportSingle').addEventListener('click', () => {
+        const o = findOrder(currentEditOrderNo);
+        if (!o) return;
+        exportToCsv([o], `代理转账订单_${o.orderNo}.csv`);
+        toast(t('ordersTransfer.toast.exported', { n: 1 }), 'success');
+      });
+
+      // 首次绑定
+      bindRowActions();
+    };
+
+    initLayout(PAGE_CONTENT);
+  </script>
+
+  <style>
+    /* ============== Lark 通知卡片（右下角滑出）============== */
+    .lark-notify {
+      position: fixed;
+      right: 20px; bottom: 20px;
+      width: 380px; max-width: calc(100vw - 40px);
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+      z-index: 9999;
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
+      font-size: 13px;
+    }
+    .lark-notify.show { opacity: 1; transform: translateY(0); }
+
+    .lark-notify-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px;
+      color: #fff;
+      background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+    }
+    .lark-notify-ok  .lark-notify-head { background: linear-gradient(90deg, #059669 0%, #10b981 100%); }
+    .lark-notify-fail .lark-notify-head { background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%); }
+
+    .lark-notify-brand {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-weight: 600; font-size: 13px;
+    }
+    .lark-notify-close {
+      background: transparent; border: none; color: rgba(255,255,255,0.85);
+      cursor: pointer; padding: 2px 6px; border-radius: 3px;
+      font-size: 14px; line-height: 1;
+    }
+    .lark-notify-close:hover { background: rgba(255,255,255,0.2); color: #fff; }
+
+    .lark-notify-target {
+      padding: 6px 14px;
+      background: #f8fafc;
+      color: var(--color-text-secondary);
+      font-size: 12px;
+      border-bottom: 1px solid #f0f3f7;
+    }
+
+    .lark-notify-body { padding: 12px 14px; }
+    .lark-notify-title {
+      font-weight: 700; font-size: 14px;
+      color: var(--color-text);
+      margin-bottom: 10px;
+    }
+    .lark-notify-lines {
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .lark-line {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px;
+    }
+    .lark-k {
+      min-width: 66px;
+      color: var(--color-text-secondary);
+    }
+    .lark-v {
+      flex: 1;
+      color: var(--color-text);
+      word-break: break-all;
+    }
+    .lark-v.mono { font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; }
+    .lark-v.strong { color: var(--color-primary); font-weight: 700; font-family: ui-monospace, monospace; }
+    .lark-line.alert .lark-v { color: #b91c1c; font-weight: 500; }
+
+    /* ============== 弹窗 Modal（居中蒙层）============== */
+    .modal {
+      position: fixed; inset: 0;
+      z-index: 999;
+      display: none;
+    }
+    .modal.show { display: flex; align-items: center; justify-content: center; }
+    .modal-mask {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(2px);
+    }
+    .modal-body {
+      position: relative; z-index: 1;
+      background: #fff; border-radius: 14px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+      animation: modalIn 0.2s;
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* 弹窗头 / 内容 / 底部 */
+    .modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid #f0f3f7;
+    }
+    .modal-head h3 {
+      font-size: 16px; font-weight: 700;
+      color: var(--color-text);
+    }
+    .modal-close {
+      width: 26px; height: 26px;
+      border: none; background: transparent;
+      cursor: pointer; border-radius: 4px;
+      color: var(--color-text-muted);
+      font-size: 16px;
+    }
+    .modal-close:hover { background: #f0f3f7; color: var(--color-text); }
+    .modal-content { padding: 20px 22px; }
+
+    .modal-foot {
+      padding: 12px 20px;
+      display: flex; justify-content: flex-end; gap: 8px;
+      border-top: 1px solid #f0f3f7;
+      background: #fafbfc;
+      border-radius: 0 0 14px 14px;
+    }
+    .modal-foot .btn-outline,
+    .modal-foot .btn-primary {
+      padding: 7px 18px;
+      font-size: 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+      font-weight: 500;
+      border: 1px solid transparent;
+      height: auto;
+    }
+    .modal-foot .btn-outline {
+      color: var(--color-text);
+      background: #fff;
+      border-color: var(--color-border);
+    }
+    .modal-foot .btn-outline:hover {
+      color: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+    .modal-foot .btn-primary {
+      color: #fff;
+      background: var(--color-primary);
+    }
+    .modal-foot .btn-primary:hover { background: var(--color-primary-hover); }
+
+    /* 通过/拒绝 弹窗宽度 */
+    .confirm-modal { width: 460px; max-width: 92vw; }
+
+    /* 通过/拒绝 弹窗内文案 */
+    .confirm-tip {
+      font-size: 13px;
+      color: var(--color-text);
+      line-height: 1.65;
+    }
+    .required { color: #ef4444; }
+
+    /* 页面头部 */
+    .page-header { margin-bottom: 16px; }
+    .page-title { font-size: 20px; font-weight: 700; color: var(--color-text); }
+    .page-desc  { font-size: 13px; color: var(--color-text-muted); margin-top: 4px; }
+
+    /* 筛选栏 —— 单行紧凑布局 */
+    .filter-bar {
+      background: #fff; border-radius: 8px; padding: 14px 18px;
+      margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .filter-row {
+      display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end;
+    }
+    .filter-item {
+      display: flex; flex-direction: column; gap: 4px;
+      flex: 1 1 150px; min-width: 140px; max-width: 220px;
+    }
+    .filter-item label {
+      font-size: 12px; color: var(--color-text-secondary);
+      line-height: 1.2;
+    }
+    .filter-item input, .filter-item select {
+      padding: 0 10px; font-size: 13px;
+      border: 1px solid var(--color-border); border-radius: 4px;
+      background: #fff; font-family: inherit; height: 32px; line-height: 32px;
+      width: 100%; box-sizing: border-box;
+    }
+    .filter-item input:focus, .filter-item select:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+    /* 时间范围：日期 + 分隔 + 日期 */
+    .filter-item.filter-item-date { flex: 1 1 250px; max-width: 300px; }
+    .date-range { display: flex; align-items: center; gap: 4px; }
+    .date-range input { flex: 1; min-width: 0; padding: 0 6px; }
+    .date-sep { color: var(--color-text-muted); flex-shrink: 0; }
+    /* 按钮组：跟在筛选项后同一行右对齐 */
+    .filter-btns {
+      display: flex; gap: 8px; margin-left: auto; align-items: flex-end;
+      /* 保持与 filter-item 底部对齐 */
+      padding-top: 16px;
+    }
+    .btn-primary, .btn-outline {
+      padding: 0 16px; height: 32px; font-size: 13px;
+      border-radius: 4px; cursor: pointer; font-family: inherit;
+      transition: all 0.15s; line-height: 30px;
+    }
+    .btn-primary { background: var(--color-primary); color: #fff; border: none; }
+    .btn-primary:hover { background: var(--color-primary-hover); }
+    .btn-outline { background: #fff; border: 1px solid var(--color-border); color: var(--color-text); }
+    .btn-outline:hover { border-color: var(--color-primary); color: var(--color-primary); }
+
+    /* 审核状态 tag */
+    .audit-tag {
+      display: inline-block; padding: 2px 10px; border-radius: 10px;
+      font-size: 12px; font-weight: 600;
+    }
+    .st-pending  { background: #fff8e6; color: #d97706; }  /* legacy */
+    .st-approved { background: #dcfce7; color: #15803d; }
+    .st-rejected { background: #fee2e2; color: #b91c1c; }  /* deprecated */
+    .st-initial  { background: #fff8e6; color: #d97706; }  /* 待初审 · 橙 */
+    .st-final    { background: #ede9fe; color: #6d28d9; }  /* 待复审 · 紫 */
+
+    /* 代理等级 tag */
+    .tier-tag {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: 12px; font-weight: 600;
+    }
+    .tier-l1 { background: #dbeafe; color: #1d4ed8; }
+    .tier-l2 { background: #ede9fe; color: #6d28d9; }
+    .tier-l3 { background: #fce7f3; color: #be185d; }
+
+    /* 拒绝原因（完整展示，不缩略）*/
+    .reject-reason {
+      color: #b91c1c; font-size: 13px;
+    }
+
+    /* 操作按钮 */
+    .op-cell { text-align: center; white-space: nowrap; font-size: 13px; }
+    .t-act {
+      padding: 2px 8px; margin: 0 2px; font-size: 12px;
+      background: transparent; border: none; cursor: pointer;
+      border-radius: 3px; color: var(--color-primary);
+      font-family: inherit; transition: background 0.15s;
+    }
+    .t-act:hover { background: rgba(0,200,150,0.08); }
+    .t-approve { color: #15803d; }
+    .t-approve:hover { background: rgba(21,128,61,0.08); }
+    .t-del { color: #b91c1c; }
+    .t-del:hover { background: rgba(185,28,28,0.08); }
+
+    /* 弹窗内订单摘要 */
+    .order-summary {
+      background: #f8fafc; border-radius: 6px; padding: 12px 14px;
+      margin-top: 12px;
+    }
+    .sm-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0; border-bottom: 1px dashed #e2e8f0;
+    }
+    .sm-row:last-child { border-bottom: none; }
+    .sm-k { font-size: 12px; color: var(--color-text-secondary); }
+    .sm-v { font-size: 13px; color: var(--color-text); text-align: right; }
+    .sm-v.strong { color: var(--color-primary); font-weight: 600; }
+    .sm-v.mono { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
+
+    /* 详情弹窗网格 */
+    .detail-grid { padding: 4px 0; }
+
+    /* ==== 详情弹窗顶部：金额 Hero 卡片 ==== */
+    .detail-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #f6fdfa 0%, #ffffff 60%);
+      border: 1px solid #e0f5ec;
+      border-radius: 10px;
+    }
+    .hero-left { flex: 1; min-width: 0; }
+    .hero-label {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+    .hero-amount {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--color-primary);
+      font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+      margin-bottom: 10px;
+    }
+    .hero-order {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: #fff;
+      border: 1px dashed #cbe6d9;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .hero-order-k { color: var(--color-text-muted); }
+    .hero-order-v { color: var(--color-text); font-family: ui-monospace, monospace; }
+    .hero-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      padding-top: 4px;
+    }
+    .hero-right .audit-tag {
+      font-size: 13px;
+      padding: 4px 14px;
+    }
+    .hero-consistency {
+      font-size: 12px;
+    }
+
+    /* ==== 中间信息网格（3 列 + label/value 同行紧凑排列）==== */
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px 20px;
+      padding: 12px 18px;
+      margin-bottom: 20px;
+      background: #f8fafc;
+      border-radius: 8px;
+    }
+    .info-cell {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 0;
+      min-width: 0;
+    }
+    .info-cell.info-cell-wide { grid-column: span 3; }
+    .info-k {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+      flex-shrink: 0;
+      min-width: 60px;
+    }
+    .info-v {
+      font-size: 13px;
+      color: var(--color-text);
+      line-height: 1.4;
+      min-width: 0;
+      overflow-wrap: break-word;
+    }
+    .info-v.mono { font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 12px; }
+
+    /* 详情弹窗分区 */
+    .detail-section { margin-bottom: 20px; }
+    .detail-section:last-child { margin-bottom: 0; }
+    .detail-section-title {
+      font-size: 14px; font-weight: 700; color: var(--color-text);
+      padding: 8px 12px; margin-bottom: 8px;
+      background: linear-gradient(90deg, #f0f9ff 0%, transparent 100%);
+      border-left: 3px solid var(--color-primary);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .detail-sum {
+      font-size: 12px; font-weight: 500; color: var(--color-text-secondary);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .check-ok { color: #15803d; font-weight: 600; }
+    .check-fail { color: #b91c1c; font-weight: 600; }
+
+    /* 详情弹窗内的明细表 */
+    .detail-table-wrap {
+      background: #fff; border: 1px solid #e2e8f0; border-radius: 6px;
+      overflow: auto; max-height: 320px;
+    }
+    .detail-table {
+      width: 100%; border-collapse: collapse; font-size: 12px;
+      min-width: 960px;
+    }
+    /* 返佣比例列高亮（区别于其他百分比字段） */
+    .rate-cell {
+      color: var(--color-primary);
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    .detail-table thead { background: #f8fafc; position: sticky; top: 0; z-index: 1; }
+    .detail-table th {
+      padding: 8px 10px; text-align: left; font-weight: 600;
+      color: var(--color-text-secondary); border-bottom: 1px solid #e2e8f0;
+      white-space: nowrap;
+    }
+    .detail-table td {
+      padding: 8px 10px; border-bottom: 1px solid #f0f3f7;
+      white-space: nowrap;
+    }
+    .detail-table tr:last-child td { border-bottom: none; }
+
+    /* 明细类型 tag */
+    .ct-tag {
+      display: inline-block; padding: 1px 8px; border-radius: 3px;
+      font-size: 11px; font-weight: 600;
+    }
+    .ct-comm  { background: #dcfce7; color: #15803d; }
+    .ct-share { background: #ede9fe; color: #6d28d9; }
+
+    /* 明细表格里的次要信息（UID）*/
+    .detail-table .sub-info {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      margin-top: 2px;
+      line-height: 1.3;
+    }
+
+    /* 溯源单元格：下级代理邮箱 + 等级 tag，垂直排列 */
+    .trace-cell {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+    }
+    .trace-cell .link-text { line-height: 1.2; }
+
+    /* 方向 tag */
+    .dir-tag {
+      display: inline-block; padding: 1px 8px; border-radius: 3px;
+      font-size: 11px; font-weight: 500;
+    }
+    .dir-open  { background: #dbeafe; color: #1d4ed8; }
+    .dir-close { background: #fef3c7; color: #b45309; }
+
+    /* 拒绝原因输入 */
+    .form-line { display: flex; flex-direction: column; gap: 5px; }
+    .form-line label { font-size: 13px; color: var(--color-text); }
+    .form-line .required { color: #ef4444; }
+    .form-line textarea {
+      padding: 8px 10px; font-size: 13px; font-family: inherit;
+      border: 1px solid var(--color-border); border-radius: 4px;
+      resize: vertical; min-height: 60px;
+    }
+    .form-line textarea:focus {
+      outline: none; border-color: var(--color-primary);
+    }
+
+    /* 表格样式 */
+    .table-wrap {
+      background: #fff; border-radius: 8px; padding: 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04); overflow: auto;
+    }
+    /* biz-table: auto 布局 + 完整展示（禁止 ellipsis），内容超宽由 .table-wrap 横滚 */
+    .biz-table { table-layout: auto; width: 100%; min-width: 100%; }
+    .biz-table th, .biz-table td {
+      padding: 11px 14px; font-size: 13px;
+      white-space: nowrap;
+    }
+    .biz-table thead { background: #f8fafc; }
+    .biz-table th { color: var(--color-text-secondary); font-weight: 600; text-align: left; }
+    .biz-table td { border-top: 1px solid #f0f3f7; }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .muted { color: var(--color-text-muted); }
+    .num { font-family: ui-monospace, monospace; }
+    .num.strong { color: var(--color-primary); font-weight: 600; }
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+    .link-text { color: var(--color-primary); }
+    .empty-row td { padding: 0; }
+    .empty-cell {
+      padding: 60px 20px; text-align: center; color: var(--color-text-muted);
+    }
+  </style>
+</body>
+</html>

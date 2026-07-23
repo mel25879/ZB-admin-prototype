@@ -39,6 +39,15 @@ const MENU_CONFIG = [
   //   ],
   // },
   {
+    id: "orders",
+    nameKey: "menu.orders",
+    icon: '<path d="M4 5h16v4H4z M4 11h16v4H4z M4 17h16v3H4z" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="8" cy="7" r="0.8" fill="currentColor"/><circle cx="8" cy="13" r="0.8" fill="currentColor"/><circle cx="8" cy="18.5" r="0.8" fill="currentColor"/>',
+    children: [
+      { id: "orders-transfer",   nameKey: "menu.orders-transfer",   href: "orders-transfer.html" },
+      { id: "orders-commission", nameKey: "menu.orders-commission", href: "orders-commission.html" },
+    ],
+  },
+  {
     id: "system",
     nameKey: "menu.system",
     icon: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9 9h6 M9 13h6 M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',

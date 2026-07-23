@@ -398,19 +398,21 @@ table.data-table {
 .data-table th.text-right, .data-table td.text-right { text-align: right; }
 .data-table th.text-center, .data-table td.text-center { text-align: center; }
 
-/* 业务表（固定布局 + 等宽列） */
-/* 业务表格：fixed-layout 保证列宽稳定；min-width 让关键列（如操作列）不被压缩，
-   容器宽度不足时由 .table-wrap 的 overflow-x:auto 自动触发横向滚动条 */
+/* 业务表（auto 布局 + 完整展示所有数据）
+ * ⚠️ 核心规则：列表字段所有数据必须完整展示，不允许省略号截断。
+ *   - table-layout: auto → 列宽由内容自动决定
+ *   - 不使用 text-overflow: ellipsis / overflow: hidden
+ *   - 保留 white-space: nowrap → 不换行（保持行高一致）
+ *   - min-width: 100% 满宽；内容超出时由 .table-wrap 的 overflow-x:auto 横向滚动
+ */
 .biz-table {
-  table-layout: fixed;
+  table-layout: auto;
   width: 100%;
-  min-width: 1100px;
+  min-width: 100%;
 }
 .biz-table th, .biz-table td {
   vertical-align: middle;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 11px 16px;
 }
 /* 表头允许换行：列宽不够时自动换行展示，避免被省略号截断 */
