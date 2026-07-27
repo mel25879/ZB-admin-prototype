@@ -9,7 +9,7 @@
 </head>
 <body data-title-key="page.orders-transfer.title">
   <div id="app"></div>
-  <script src="assets/js/i18n.js?v=22"></script>
+  <script src="assets/js/i18n.js?v=28"></script>
   <script src="assets/js/common.js?v=2"></script>
   <script>
     // 登录守卫
@@ -43,12 +43,11 @@
     }
 
     /* ============== 数据模型 & 存储 ==============
-     * 转账订单（两阶段审核）：
+     * 转账订单（单阶段审核）：
      * {
      *   orderNo, withdrawalOrderNo, agentSid, agentEmail, agentTier, amount, applyTime,
-     *   auditStatus: 'initial_review' | 'final_review' | 'approved',
-     *   initialReviewer, initialReviewTime,   // 初审操作人 + 初审时间
-     *   finalReviewer,   finalReviewTime,     // 复审操作人 + 复审时间
+     *   auditStatus: 'pending_review' | 'approved',
+     *   reviewer, reviewTime,                 // 审核操作人 + 审核时间
      * }
      *
      * 佣金/分成明细（与转账订单关联）：
@@ -69,19 +68,16 @@
     const COMMISSIONS_KEY = 'zb_commissions_v2';
 
     /* ============== 审核操作人 ==============
-     * 不绑定指定角色：初审、复审的权限由系统角色配置控制。
+     * 不绑定指定角色：审核权限由系统角色配置控制。
      * 原型中直接记录当前登录的后台账号，便于保留审核轨迹。
      */
     function getCurrentReviewer() {
       return localStorage.getItem('zb_admin_account') || 'Admin';
     }
 
-    // 首次进入若无数据，注入 15 条 mock（覆盖 3 种状态，横跨 L1/L2/L3）
-    // - 4 条 initial_review（待初审）—— 演示"初审通过"操作
-    // - 2 条 final_review（待复审）—— 演示"复审通过"操作
-    // - 9 条 approved（复审通过，含完整审核记录）
+    // 首次进入若无数据，注入 15 条 mock（待审核 / 审核成功，横跨 L1/L2/L3）
     const DEFAULT_ORDERS = [
-      /* ═══════════ 待初审 · 4 条 ═══════════ */
+      /* ═══════════ 待审核 · 4 条 ═══════════ */
       {
         orderNo: 'ITX1020260722120001', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
         amount: 250.00, applyTime: '2026-07-22 09:12:45',
@@ -111,7 +107,7 @@
         finalReviewer:   null, finalReviewTime:   null,
       },
 
-      /* ═══════════ 待复审 · 2 条（初审已通过，等待复审）═══════════ */
+      /* ═══════════ 待审核 · 2 条 ═══════════ */
       {
         orderNo: 'ITX1020260722120005', agentSid: 'S1005', agentEmail: 'mary@hotmail.com', agentTier: 'L2',
         amount: 460.00, applyTime: '2026-07-22 14:47:03',
@@ -127,7 +123,7 @@
         finalReviewer:   null,        finalReviewTime:   null,
       },
 
-      /* ═══════════ 复审通过 · 9 条（初审 + 复审都完成）═══════════ */
+      /* ═══════════ 审核成功 · 9 条 ═══════════ */
       {
         orderNo: 'ITX1020260720120010', agentSid: 'S1001', agentEmail: 'alice@gmail.com', agentTier: 'L1',
         amount: 200.00, applyTime: '2026-07-20 10:15:00',
@@ -202,12 +198,21 @@
       return order.withdrawalOrderNo || `WD${String(order.orderNo || '').replace(/^ITX/, '')}`;
     }
     function normalizeOrders(list) {
-      return list.map((order) => ({
-        ...order,
-        withdrawalOrderNo: getWithdrawalOrderNo(order),
-        initialReviewer: normalizeReviewerName(order.initialReviewer),
-        finalReviewer: normalizeReviewerName(order.finalReviewer),
-      }));
+      return list.map((order) => {
+        const isApproved = order.auditStatus === 'approved';
+        return {
+          ...order,
+          // 兼容旧版初审/复审状态：未完成订单统一迁移为待审核。
+          auditStatus: isApproved ? 'approved' : 'pending_review',
+          withdrawalOrderNo: getWithdrawalOrderNo(order),
+          reviewer: isApproved
+            ? normalizeReviewerName(order.reviewer || order.finalReviewer || order.initialReviewer)
+            : null,
+          reviewTime: isApproved
+            ? (order.reviewTime || order.finalReviewTime || order.initialReviewTime || null)
+            : null,
+        };
+      });
     }
     function loadOrders() {
       try {
@@ -507,19 +512,18 @@
       orderNo: '',
       withdrawalOrderNo: '',
       email: '',
-      status: '',   // '' | 'pending' | 'approved' | 'rejected'
+      status: '',   // '' | 'pending_review' | 'approved'
       startDate: '',
       endDate: '',
     };
 
-    /* ============== 状态 / 等级 tag（待初审 / 待复审 / 复审通过）============== */
+    /* ============== 状态 / 等级 tag（待审核 / 审核成功）============== */
     function auditStatusTag(status) {
       const map = {
-        initial_review: { cls: 'st-initial', key: 'ordersTransfer.status.initialReview' },
-        final_review:   { cls: 'st-final',   key: 'ordersTransfer.status.finalReview'   },
+        pending_review: { cls: 'st-initial', key: 'ordersTransfer.status.pendingReview' },
         approved:       { cls: 'st-approved',key: 'ordersTransfer.status.approved'      },
       };
-      const info = map[status] || map.initial_review;
+      const info = map[status] || map.pending_review;
       return `<span class="audit-tag ${info.cls}">${t(info.key)}</span>`;
     }
     function tierTag(tier) {
@@ -539,17 +543,13 @@
       }).sort((a, b) => b.applyTime.localeCompare(a.applyTime));  // 按申请时间倒序
     }
 
-    /* ============== 表格行渲染（初审 / 复审两阶段流程）============== */
+    /* ============== 表格行渲染（单阶段审核流程）============== */
     function renderRow(o) {
-      const initReviewer  = o.initialReviewer || '<span class="muted">-</span>';
-      const finalReviewer = o.finalReviewer   || '<span class="muted">-</span>';
-      const initReviewTime  = o.initialReviewTime || '<span class="muted">-</span>';
-      const finalReviewTime = o.finalReviewTime   || '<span class="muted">-</span>';
+      const reviewer = o.reviewer || '<span class="muted">-</span>';
+      const reviewTime = o.reviewTime || '<span class="muted">-</span>';
       let actionBtn;
-      if (o.auditStatus === 'initial_review') {
-        actionBtn = `<button class="t-act t-approve" data-act="initial-approve" data-order="${o.orderNo}">${t('ordersTransfer.btn.initialApprove')}</button>`;
-      } else if (o.auditStatus === 'final_review') {
-        actionBtn = `<button class="t-act t-approve" data-act="final-approve" data-order="${o.orderNo}">${t('ordersTransfer.btn.finalApprove')}</button>`;
+      if (o.auditStatus === 'pending_review') {
+        actionBtn = `<button class="t-act t-approve" data-act="approve" data-order="${o.orderNo}">${t('ordersTransfer.btn.approve')}</button>`;
       } else {
         actionBtn = '';
       }
@@ -563,10 +563,8 @@
           <td class="text-right num strong">${fmtUSDT(o.amount)}</td>
           <td class="muted">${o.applyTime}</td>
           <td class="text-center">${auditStatusTag(o.auditStatus)}</td>
-          <td>${initReviewer}</td>
-          <td class="muted">${initReviewTime}</td>
-          <td>${finalReviewer}</td>
-          <td class="muted">${finalReviewTime}</td>
+          <td>${reviewer}</td>
+          <td class="muted">${reviewTime}</td>
           <td class="op-cell">
             ${actionBtn}
             <button class="t-act" data-act="detail" data-order="${o.orderNo}">${t('ordersTransfer.btn.detail')}</button>
@@ -579,7 +577,7 @@
       const list = getFilteredOrders();
       const rows = list.length
         ? list.map(renderRow).join('')
-        : `<tr class="empty-row"><td colspan="13"><div class="empty-cell">${t('ordersTransfer.empty')}</div></td></tr>`;
+        : `<tr class="empty-row"><td colspan="11"><div class="empty-cell">${t('ordersTransfer.empty')}</div></td></tr>`;
       return `
         <!-- 表格 -->
         <div class="table-wrap">
@@ -594,10 +592,8 @@
                 <th class="text-right">${t('ordersTransfer.col.amount')}</th>
                 <th>${t('ordersTransfer.col.applyTime')}</th>
                 <th class="text-center">${t('ordersTransfer.col.auditStatus')}</th>
-                <th>${t('ordersTransfer.col.initialReviewer')}</th>
-                <th>${t('ordersTransfer.col.initialReviewTime')}</th>
-                <th>${t('ordersTransfer.col.finalReviewer')}</th>
-                <th>${t('ordersTransfer.col.finalReviewTime')}</th>
+                <th>${t('ordersTransfer.col.reviewer')}</th>
+                <th>${t('ordersTransfer.col.reviewTime')}</th>
                 <th class="text-center">${t('ordersTransfer.col.actions')}</th>
               </tr>
             </thead>
@@ -632,8 +628,7 @@
             <label>${t('ordersTransfer.filter.status')}</label>
             <select id="fStatus">
               <option value="">${t('ordersTransfer.filter.all')}</option>
-              <option value="initial_review">${t('ordersTransfer.status.initialReview')}</option>
-              <option value="final_review">${t('ordersTransfer.status.finalReview')}</option>
+              <option value="pending_review">${t('ordersTransfer.status.pendingReview')}</option>
               <option value="approved">${t('ordersTransfer.status.approved')}</option>
             </select>
           </div>
@@ -656,16 +651,16 @@
       <!-- 表格容器（动态刷新） -->
       <div id="tableContainer">${renderTable()}</div>
 
-      <!-- 审核通过弹窗（初审 / 复审共用；动态标题+提示） -->
+      <!-- 审核通过弹窗 -->
       <div class="modal" id="approveModal">
         <div class="modal-mask" data-act="close-approve"></div>
         <div class="modal-body confirm-modal">
           <div class="modal-head">
-            <h3 id="approveTitle">${t('ordersTransfer.modal.initialTitle')}</h3>
+            <h3 id="approveTitle">${t('ordersTransfer.modal.reviewTitle')}</h3>
             <button class="modal-close" data-act="close-approve">✕</button>
           </div>
           <div class="modal-content">
-            <p class="confirm-tip" id="approveTip">${t('ordersTransfer.modal.initialTip')}</p>
+            <p class="confirm-tip" id="approveTip">${t('ordersTransfer.modal.reviewTip')}</p>
             <div class="order-summary" id="approveSummary"></div>
           </div>
           <div class="modal-foot">
@@ -713,6 +708,20 @@
       const pad = (n) => String(n).padStart(2, '0');
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     }
+    // 分成明细的历史 mock 仅存下级代理邮箱；按已有代理数据补齐 UID。
+    function getSourceAgentSid(c) {
+      if (c.fromAgentSid) return c.fromAgentSid;
+      const sidByEmail = {
+        'alice@gmail.com': 'S1001',
+        'bob@outlook.com': 'S1002',
+        'amy@163.com': 'S1004',
+        'mary@hotmail.com': 'S1005',
+        'sara@gmail.com': 'S1006',
+        'lucas@gmail.com': 'S1008',
+        'derek@gmail.com': 'S1010',
+      };
+      return sidByEmail[c.fromAgentEmail] || '-';
+    }
 
     function detailHtml(o) {
       const commissions = getCommissionsByTransferOrder(o.orderNo);
@@ -729,14 +738,15 @@
         ? `<span class="check-ok">✓ ${t('ordersTransfer.detail.amountMatch')}</span>`
         : `<span class="check-fail">✕ ${t('ordersTransfer.detail.amountMismatch', { sum: fmtUSDT(commSum) })}</span>`;
 
-      /* 佣金明细行（无溯源信息，因为是自己直接邀请）*/
+      /* 佣金明细行：交易用户邮箱与 UID 独立展示 */
       const commRows = commList.length
         ? commList.map((c, idx) => `
             <tr>
               <td class="text-center muted">${idx + 1}</td>
               <td>${dirTag(c.direction)}</td>
               <td class="mono">${c.orderNo}</td>
-              <td><span class="link-text">${c.userEmail}</span><div class="sub-info mono">${c.userSid}</div></td>
+              <td><span class="link-text">${c.userEmail}</span></td>
+              <td class="mono">${c.userSid}</td>
               <td class="text-right num">${fmtUSDT(c.tradeAmount)}</td>
               <td class="text-right num">${fmtUSDT(c.fee)}</td>
               <td class="text-center rate-cell">${getCommissionRate(c)}%</td>
@@ -745,23 +755,20 @@
               <td class="muted">${c.createdAt}</td>
             </tr>
           `).join('')
-        : `<tr><td colspan="10" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noCommission')}</td></tr>`;
+        : `<tr><td colspan="11" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noCommission')}</td></tr>`;
 
-      /* 分成明细行（含溯源信息：交易用户 + 下级代理 + 代理等级 + 分成比例）*/
+      /* 分成明细行：交易用户及下级代理信息均拆分为独立列 */
       const shareRows = shareList.length
         ? shareList.map((c, idx) => `
             <tr>
               <td class="text-center muted">${idx + 1}</td>
               <td>${dirTag(c.direction)}</td>
               <td class="mono">${c.orderNo}</td>
-              <td>
-                <span class="link-text">${c.userEmail}</span>
-                <div class="sub-info mono">${c.userSid}</div>
-              </td>
-              <td class="trace-cell">
-                <span class="link-text">${c.fromAgentEmail || '-'}</span>
-                ${c.fromAgentTier ? tierTag(c.fromAgentTier) : ''}
-              </td>
+              <td><span class="link-text">${c.userEmail}</span></td>
+              <td class="mono">${c.userSid}</td>
+              <td><span class="link-text">${c.fromAgentEmail || '-'}</span></td>
+              <td class="mono">${getSourceAgentSid(c)}</td>
+              <td>${c.fromAgentTier ? tierTag(c.fromAgentTier) : '-'}</td>
               <td class="text-right num">${fmtUSDT(c.tradeAmount)}</td>
               <td class="text-right num">${fmtUSDT(c.fee)}</td>
               <td class="text-center">${c.shareRate != null ? c.shareRate + '%' : '-'}</td>
@@ -770,7 +777,7 @@
               <td class="muted">${c.createdAt}</td>
             </tr>
           `).join('')
-        : `<tr><td colspan="11" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noShare')}</td></tr>`;
+        : `<tr><td colspan="14" class="empty-cell" style="padding:20px 10px;">${t('ordersTransfer.detail.noShare')}</td></tr>`;
 
       return `
         <!-- 顶部：金额 hero 卡片 + 状态 tag -->
@@ -808,20 +815,12 @@
             <div class="info-v">${o.applyTime}</div>
           </div>
           <div class="info-cell">
-            <div class="info-k">${t('ordersTransfer.col.initialReviewer')}</div>
-            <div class="info-v">${o.initialReviewer || '-'}</div>
+            <div class="info-k">${t('ordersTransfer.col.reviewer')}</div>
+            <div class="info-v">${o.reviewer || '-'}</div>
           </div>
           <div class="info-cell">
-            <div class="info-k">${t('ordersTransfer.col.initialReviewTime')}</div>
-            <div class="info-v">${o.initialReviewTime || '-'}</div>
-          </div>
-          <div class="info-cell">
-            <div class="info-k">${t('ordersTransfer.col.finalReviewer')}</div>
-            <div class="info-v">${o.finalReviewer || '-'}</div>
-          </div>
-          <div class="info-cell">
-            <div class="info-k">${t('ordersTransfer.col.finalReviewTime')}</div>
-            <div class="info-v">${o.finalReviewTime || '-'}</div>
+            <div class="info-k">${t('ordersTransfer.col.reviewTime')}</div>
+            <div class="info-v">${o.reviewTime || '-'}</div>
           </div>
         </div>
 
@@ -838,7 +837,8 @@
                   <th class="text-center" style="width:36px;">#</th>
                   <th>${t('ordersTransfer.detail.col.direction')}</th>
                   <th>${t('ordersTransfer.detail.col.tradeOrderNo')}</th>
-                  <th>${t('ordersTransfer.detail.col.tradeUser')}</th>
+                  <th>${t('ordersTransfer.detail.col.userEmail')}</th>
+                  <th>${t('ordersTransfer.detail.col.userSid')}</th>
                   <th class="text-right">${t('ordersTransfer.detail.col.tradeAmount')}</th>
                   <th class="text-right">${t('ordersTransfer.detail.col.fee')}</th>
                   <th class="text-center">${t('ordersTransfer.detail.col.commissionRate')}</th>
@@ -865,8 +865,11 @@
                   <th class="text-center" style="width:36px;">#</th>
                   <th>${t('ordersTransfer.detail.col.direction')}</th>
                   <th>${t('ordersTransfer.detail.col.tradeOrderNo')}</th>
-                  <th>${t('ordersTransfer.detail.col.tradeUser')}</th>
-                  <th>${t('ordersTransfer.detail.col.subAgent')}</th>
+                  <th>${t('ordersTransfer.detail.col.userEmail')}</th>
+                  <th>${t('ordersTransfer.detail.col.userSid')}</th>
+                  <th>${t('ordersTransfer.detail.col.subAgentEmail')}</th>
+                  <th>${t('ordersTransfer.detail.col.subAgentSid')}</th>
+                  <th>${t('ordersTransfer.detail.col.subAgentTier')}</th>
                   <th class="text-right">${t('ordersTransfer.detail.col.tradeAmount')}</th>
                   <th class="text-right">${t('ordersTransfer.detail.col.fee')}</th>
                   <th class="text-center">${t('ordersTransfer.detail.col.shareRate')}</th>
@@ -922,32 +925,16 @@
 
     /* ============== 绑定行内按钮 ============== */
     let currentEditOrderNo = null;
-    let currentReviewStage = null;  // 'initial' | 'final'
     function bindRowActions() {
-      // 初审通过按钮
-      document.querySelectorAll('[data-act="initial-approve"]').forEach((btn) => {
+      // 审核通过按钮
+      document.querySelectorAll('[data-act="approve"]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const orderNo = btn.dataset.order;
           const o = findOrder(orderNo);
-          if (!o || o.auditStatus !== 'initial_review') return toast(t('ordersTransfer.toast.notInitial'), 'danger');
+          if (!o || o.auditStatus !== 'pending_review') return toast(t('ordersTransfer.toast.notPendingReview'), 'danger');
           currentEditOrderNo = orderNo;
-          currentReviewStage = 'initial';
-          document.getElementById('approveTitle').textContent = t('ordersTransfer.modal.initialTitle');
-          document.getElementById('approveTip').textContent   = t('ordersTransfer.modal.initialTip');
-          document.getElementById('approveSummary').innerHTML = summaryHtml(o);
-          openModal('approveModal');
-        });
-      });
-      // 复审通过按钮
-      document.querySelectorAll('[data-act="final-approve"]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const orderNo = btn.dataset.order;
-          const o = findOrder(orderNo);
-          if (!o || o.auditStatus !== 'final_review') return toast(t('ordersTransfer.toast.notFinal'), 'danger');
-          currentEditOrderNo = orderNo;
-          currentReviewStage = 'final';
-          document.getElementById('approveTitle').textContent = t('ordersTransfer.modal.finalTitle');
-          document.getElementById('approveTip').textContent   = t('ordersTransfer.modal.finalTip');
+          document.getElementById('approveTitle').textContent = t('ordersTransfer.modal.reviewTitle');
+          document.getElementById('approveTip').textContent   = t('ordersTransfer.modal.reviewTip');
           document.getElementById('approveSummary').innerHTML = summaryHtml(o);
           openModal('approveModal');
         });
@@ -965,14 +952,14 @@
     }
 
     /* ============== Lark 通知（系统自动触发）==============
-     * 触发时机：复审通过后自动调用
+     * 触发时机：审核通过后自动调用
      * 呈现方式：右下角滑出 Lark 风格通知卡片，展示会推送的内容
      * 生产实现：把 payload 通过 fetch POST 到 Lark 群机器人 webhook 即可
      */
     const NOTIFY_TARGET = '财务审核群';  // 演示用，实际由配置提供
 
     function pushLarkNotification(order, action) {
-      // action: 目前仅 'approved'（当前流程只支持两阶段通过）
+      // action: 目前仅 'approved'（当前流程仅支持审核通过）
       const payload = buildLarkPayload(order, action);
       // 生产环境这里会：fetch(WEBHOOK_URL, { method: 'POST', body: JSON.stringify(payload) })
       // 原型层面：只做视觉呈现
@@ -980,15 +967,15 @@
     }
 
     function buildLarkPayload(order, action) {
-      const title = '【复审通过】代理转账订单审核完成';
+      const title = '【审核成功】代理转账订单审核完成';
       const lines = [
         { k: '转账单号', v: order.orderNo, mono: true },
         { k: '代理邮箱', v: order.agentEmail },
         { k: '代理UID',  v: order.agentSid, mono: true },
         { k: '代理等级', v: order.agentTier },
         { k: '转账金额', v: fmtUSDT(order.amount), strong: true },
-        { k: '复审操作人', v: order.finalReviewer || 'Admin' },
-        { k: '复审时间',   v: order.finalReviewTime || nowStr() },
+        { k: '审核操作人', v: order.reviewer || 'Admin' },
+        { k: '审核时间',   v: order.reviewTime || nowStr() },
       ];
       return { title, target: NOTIFY_TARGET, lines, action };
     }
@@ -1040,12 +1027,12 @@
     const EXPORT_HEADERS = [
       '转账单号', '代理邮箱', '代理UID', '代理等级', '转账金额(USDT)',
       '转账申请时间', '审核状态',
-      '初审人', '初审时间', '复审人', '复审时间',
+      '审核人', '审核时间',
       '明细序号', '明细类型', '交易方向', '交易单号',
       '用户邮箱', '用户UID', '交易额(USDT)', '手续费(USDT)',
       '返佣比例', '分成比例', '分成来源代理', '佣金/分成金额(USDT)', '明细结算时间',
     ];
-    const STATUS_LABEL = { initial_review: '待初审', final_review: '待复审', approved: '复审通过' };
+    const STATUS_LABEL = { pending_review: '待审核', approved: '审核成功' };
     const TYPE_LABEL   = { commission: '佣金', share: '分成' };
     const DIR_LABEL    = { open: '开仓', close: '平仓' };
 
@@ -1062,8 +1049,7 @@
       const orderCols = [
         o.orderNo, o.agentEmail, o.agentSid, o.agentTier, Number(o.amount).toFixed(2),
         o.applyTime, STATUS_LABEL[o.auditStatus] || o.auditStatus,
-        o.initialReviewer || '', o.initialReviewTime || '',
-        o.finalReviewer   || '', o.finalReviewTime   || '',
+        o.reviewer || '', o.reviewTime || '',
       ];
       if (!commissions.length) {
         // 没关联明细也占 1 行（明细列留空）
@@ -1132,35 +1118,22 @@
       document.querySelectorAll('[data-act="close-approve"]').forEach((el) => el.addEventListener('click', () => closeModal('approveModal')));
       document.querySelectorAll('[data-act="close-detail"]').forEach((el) => el.addEventListener('click', () => closeModal('detailModal')));
 
-      // 审核通过（初审 / 复审共用同一个 handler，根据 currentReviewStage 分流）
+      // 审核通过：待审核订单直接流转为审核成功。
       // 注：Lark 通知的触发节点已从"审核通过后"改为"代理发起转账时"（在代理后台侧触发）
       document.getElementById('btnConfirmApprove').addEventListener('click', () => {
         const o = findOrder(currentEditOrderNo);
         if (!o) { closeModal('approveModal'); return; }
 
-        if (currentReviewStage === 'initial') {
-          if (o.auditStatus !== 'initial_review') {
-            closeModal('approveModal');
-            return toast(t('ordersTransfer.toast.notInitial'), 'danger');
-          }
-          o.auditStatus        = 'final_review';
-          o.initialReviewer    = getCurrentReviewer();
-          o.initialReviewTime  = nowStr();
-          saveOrders(ORDERS);
+        if (o.auditStatus !== 'pending_review') {
           closeModal('approveModal');
-          toast(t('ordersTransfer.toast.initialApproved'), 'success');
-        } else if (currentReviewStage === 'final') {
-          if (o.auditStatus !== 'final_review') {
-            closeModal('approveModal');
-            return toast(t('ordersTransfer.toast.notFinal'), 'danger');
-          }
-          o.auditStatus     = 'approved';
-          o.finalReviewer   = getCurrentReviewer();
-          o.finalReviewTime = nowStr();
-          saveOrders(ORDERS);
-          closeModal('approveModal');
-          toast(t('ordersTransfer.toast.finalApproved'), 'success');
+          return toast(t('ordersTransfer.toast.notPendingReview'), 'danger');
         }
+        o.auditStatus = 'approved';
+        o.reviewer = getCurrentReviewer();
+        o.reviewTime = nowStr();
+        saveOrders(ORDERS);
+        closeModal('approveModal');
+        toast(t('ordersTransfer.toast.reviewApproved'), 'success');
         refresh();
       });
 
@@ -1406,8 +1379,7 @@
     .st-pending  { background: #fff8e6; color: #d97706; }  /* legacy */
     .st-approved { background: #dcfce7; color: #15803d; }
     .st-rejected { background: #fee2e2; color: #b91c1c; }  /* deprecated */
-    .st-initial  { background: #fff8e6; color: #d97706; }  /* 待初审 · 橙 */
-    .st-final    { background: #ede9fe; color: #6d28d9; }  /* 待复审 · 紫 */
+    .st-initial  { background: #fff8e6; color: #d97706; }  /* 待审核 · 橙 */
 
     /* 代理等级 tag */
     .tier-tag {

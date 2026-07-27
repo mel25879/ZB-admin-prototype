@@ -110,6 +110,8 @@ const I18N = {
     'ordersTransfer.col.auditStatus': '审核状态',
     'ordersTransfer.col.auditor': '审核人',
     'ordersTransfer.col.auditTime': '审核时间',
+    'ordersTransfer.col.reviewer': '审核人',
+    'ordersTransfer.col.reviewTime': '审核时间',
     'ordersTransfer.col.initialReviewer': '初审人',
     'ordersTransfer.col.initialReviewTime': '初审时间',
     'ordersTransfer.col.finalReviewer': '复审人',
@@ -118,7 +120,8 @@ const I18N = {
     'ordersTransfer.col.actions': '操作',
 
     'ordersTransfer.status.pending': '审核中',        /* 已弃用 —— 双人复审后拆为 initial/final */
-    'ordersTransfer.status.approved': '复审通过',
+    'ordersTransfer.status.approved': '审核成功',
+    'ordersTransfer.status.pendingReview': '待审核',
     'ordersTransfer.status.rejected': '审核拒绝',    /* 已弃用（业务简化后不再有拒绝状态） */
     'ordersTransfer.status.initialReview': '待初审',
     'ordersTransfer.status.finalReview':   '待复审',
@@ -133,7 +136,7 @@ const I18N = {
     'ordersTransfer.filter.placeholder.email': '请输入代理邮箱',
     'ordersTransfer.filter.all': '全部',
 
-    'ordersTransfer.btn.approve': '通过',           /* 兼容旧引用 */
+    'ordersTransfer.btn.approve': '审核通过',
     'ordersTransfer.btn.reject': '拒绝',            /* 已弃用 */
     'ordersTransfer.btn.detail': '详情',
     'ordersTransfer.btn.initialApprove': '初审通过',
@@ -158,9 +161,13 @@ const I18N = {
     'ordersTransfer.detail.col.type': '类型',
     'ordersTransfer.detail.col.direction': '方向',
     'ordersTransfer.detail.col.tradeOrderNo': '交易单号',
-    'ordersTransfer.detail.col.userEmail': '用户邮箱',
+    'ordersTransfer.detail.col.userEmail': '交易用户邮箱',
+    'ordersTransfer.detail.col.userSid': '交易用户UID',
     'ordersTransfer.detail.col.tradeUser': '交易用户',
     'ordersTransfer.detail.col.subAgent': '下级代理',
+    'ordersTransfer.detail.col.subAgentEmail': '下级代理邮箱',
+    'ordersTransfer.detail.col.subAgentSid': '下级代理UID',
+    'ordersTransfer.detail.col.subAgentTier': '下级代理等级',
     'ordersTransfer.detail.col.tradeAmount': '交易额',
     'ordersTransfer.detail.col.fee': '手续费',
     'ordersTransfer.detail.col.commissionRate': '返佣比例',
@@ -177,12 +184,14 @@ const I18N = {
 
     'ordersTransfer.modal.approveTitle': '审核通过',   /* 兼容旧引用 */
     'ordersTransfer.modal.approveTip': '确认审核通过该笔转账订单？',   /* 兼容 */
+    'ordersTransfer.modal.reviewTitle': '审核通过',
+    'ordersTransfer.modal.reviewTip': '确认审核通过？通过后订单状态将更新为“审核成功”。',
     'ordersTransfer.modal.rejectTitle': '审核拒绝',    /* 已弃用 */
     'ordersTransfer.modal.rejectTip': '拒绝后代理"可提现金额"不会被扣除。',  /* 已弃用 */
     'ordersTransfer.modal.initialTitle': '初审通过',
     'ordersTransfer.modal.initialTip': '确认初审通过？通过后订单将流转到“待复审”。此时代理“可提现金额”仍不会被扣除。',
     'ordersTransfer.modal.finalTitle': '复审通过',
-    'ordersTransfer.modal.finalTip': '确认复审通过？通过后订单状态变为“复审通过”，系统将从代理“可提现金额”中扣款并转入其交易账户。',
+    'ordersTransfer.modal.finalTip': '确认复审通过？通过后订单状态变为“审核成功”，系统将从代理“可提现金额”中扣款。',
     'ordersTransfer.modal.reasonLabel': '拒绝原因',
     'ordersTransfer.modal.reasonPlaceholder': '请输入拒绝原因（必填，30 字以内）',
     'ordersTransfer.modal.detailTitle': '代理转账订单详情',
@@ -192,6 +201,8 @@ const I18N = {
     'ordersTransfer.toast.reasonRequired': '拒绝原因必填',          /* deprecated */
     'ordersTransfer.toast.reasonTooLong': '拒绝原因最多 30 字',     /* deprecated */
     'ordersTransfer.toast.notPending': '该订单已被处理过',           /* legacy */
+    'ordersTransfer.toast.reviewApproved': '审核通过，订单已更新为审核成功',
+    'ordersTransfer.toast.notPendingReview': '该订单不在“待审核”状态',
     'ordersTransfer.toast.initialApproved': '初审通过，已流转到复审',
     'ordersTransfer.toast.finalApproved': '复审通过，代理账户已扣款',
     'ordersTransfer.toast.notInitial': '该订单不在"待初审"状态',
@@ -912,6 +923,8 @@ const I18N = {
     'ordersTransfer.col.auditStatus': 'Audit Status',
     'ordersTransfer.col.auditor': 'Auditor',
     'ordersTransfer.col.auditTime': 'Audit Time',
+    'ordersTransfer.col.reviewer': 'Reviewer',
+    'ordersTransfer.col.reviewTime': 'Review Time',
     'ordersTransfer.col.initialReviewer': 'Initial Reviewer',
     'ordersTransfer.col.initialReviewTime': 'Initial Review Time',
     'ordersTransfer.col.finalReviewer': 'Final Reviewer',
@@ -920,7 +933,8 @@ const I18N = {
     'ordersTransfer.col.actions': 'Actions',
 
     'ordersTransfer.status.pending': 'In Review',   /* deprecated */
-    'ordersTransfer.status.approved': 'Final Approved',
+    'ordersTransfer.status.approved': 'Audit Successful',
+    'ordersTransfer.status.pendingReview': 'Pending Review',
     'ordersTransfer.status.rejected': 'Rejected',   /* deprecated */
     'ordersTransfer.status.initialReview': 'Pending Initial Review',
     'ordersTransfer.status.finalReview':   'Pending Final Review',
@@ -935,7 +949,7 @@ const I18N = {
     'ordersTransfer.filter.placeholder.email': 'Enter agent email',
     'ordersTransfer.filter.all': 'All',
 
-    'ordersTransfer.btn.approve': 'Approve',        /* legacy */
+    'ordersTransfer.btn.approve': 'Approve',
     'ordersTransfer.btn.reject': 'Reject',          /* deprecated */
     'ordersTransfer.btn.detail': 'Detail',
     'ordersTransfer.btn.initialApprove': 'Initial Approve',
@@ -959,9 +973,13 @@ const I18N = {
     'ordersTransfer.detail.col.type': 'Type',
     'ordersTransfer.detail.col.direction': 'Direction',
     'ordersTransfer.detail.col.tradeOrderNo': 'Trade Order No.',
-    'ordersTransfer.detail.col.userEmail': 'User Email',
+    'ordersTransfer.detail.col.userEmail': 'Trading User Email',
+    'ordersTransfer.detail.col.userSid': 'Trading User UID',
     'ordersTransfer.detail.col.tradeUser': 'Trade User',
     'ordersTransfer.detail.col.subAgent': 'Sub-agent',
+    'ordersTransfer.detail.col.subAgentEmail': 'Sub-agent Email',
+    'ordersTransfer.detail.col.subAgentSid': 'Sub-agent UID',
+    'ordersTransfer.detail.col.subAgentTier': 'Sub-agent Tier',
     'ordersTransfer.detail.col.tradeAmount': 'Trade Amount',
     'ordersTransfer.detail.col.fee': 'Fee',
     'ordersTransfer.detail.col.commissionRate': 'Rebate Rate',
@@ -978,12 +996,14 @@ const I18N = {
 
     'ordersTransfer.modal.approveTitle': 'Approve',   /* legacy */
     'ordersTransfer.modal.approveTip': 'Confirm to approve?',   /* legacy */
+    'ordersTransfer.modal.reviewTitle': 'Approve',
+    'ordersTransfer.modal.reviewTip': 'Confirm approval? The order will be marked as "Audit Successful".',
     'ordersTransfer.modal.rejectTitle': 'Reject',              /* deprecated */
     'ordersTransfer.modal.rejectTip': 'Rejecting will not deduct the agent balance.',   /* deprecated */
     'ordersTransfer.modal.initialTitle': 'Initial Approve',
     'ordersTransfer.modal.initialTip': 'Confirm initial approval? The order will move to "Pending Final Review". The agent balance will NOT be deducted yet.',
     'ordersTransfer.modal.finalTitle': 'Final Approve',
-    'ordersTransfer.modal.finalTip': 'Confirm final approval? The order will be marked as "Final Approved" and the amount will be deducted from the agent balance and transferred to their trading account.',
+    'ordersTransfer.modal.finalTip': 'Confirm final approval? The order will be marked as "Audit Successful" and the amount will be deducted from the agent balance.',
     'ordersTransfer.modal.reasonLabel': 'Reject Reason',
     'ordersTransfer.modal.reasonPlaceholder': 'Reject reason (required, max 30 chars)',
     'ordersTransfer.modal.detailTitle': 'Agent Transfer Order Detail',
@@ -993,6 +1013,8 @@ const I18N = {
     'ordersTransfer.toast.reasonRequired': 'Reject reason is required',      /* deprecated */
     'ordersTransfer.toast.reasonTooLong': 'Reason must be within 30 chars',  /* deprecated */
     'ordersTransfer.toast.notPending': 'This order has already been processed',  /* legacy */
+    'ordersTransfer.toast.reviewApproved': 'Approved. The order is now audit successful.',
+    'ordersTransfer.toast.notPendingReview': 'This order is not in "Pending Review" status',
     'ordersTransfer.toast.initialApproved': 'Initial approved. Moved to final review.',
     'ordersTransfer.toast.finalApproved': 'Final approved. Agent balance deducted.',
     'ordersTransfer.toast.notInitial': 'This order is not in "Initial Review" status',

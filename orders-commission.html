@@ -237,8 +237,8 @@
 
     function buildExportRows(list, isShare) {
       const headers = isShare
-        ? ['代理邮箱','代理UID','代理等级','方向','交易单号','用户邮箱','用户UID','交易额(USDT)','手续费(USDT)','返佣比例','分成比例','分成来源代理','分成金额(USDT)','结算时间','关联转账单号']
-        : ['代理邮箱','代理UID','代理等级','方向','交易单号','用户邮箱','用户UID','交易额(USDT)','手续费(USDT)','返佣比例','佣金金额(USDT)','结算时间','关联转账单号'];
+        ? ['代理邮箱','代理UID','代理等级','方向','交易单号','用户邮箱','用户UID','交易额(USDT)','手续费(USDT)','返佣比例','分成比例','分成来源代理','分成金额(USDT)','结算时间']
+        : ['代理邮箱','代理UID','代理等级','方向','交易单号','用户邮箱','用户UID','交易额(USDT)','手续费(USDT)','返佣比例','佣金金额(USDT)','结算时间'];
       const rows = [headers];
       list.forEach((c) => {
         const row = [
@@ -254,7 +254,6 @@
         }
         row.push(Number(c.amount).toFixed(2));
         row.push(c.createdAt);
-        row.push(c.transferOrderNo || '未打包');
         rows.push(row);
       });
       return rows;
